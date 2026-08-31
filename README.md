@@ -1,10 +1,10 @@
 # Erdvyn Launcher
 
-Windows launcher for Erdvyn: The Frontier.
+Windows launcher for Erdvyn: The Frontier MC Server.
 
 ## Requirements
 
-- Windows 10 or newer
+- Windows 10 or newer (Linux support soon)
 - Java Development Kit 21
 - Inno Setup 6 for installer packaging
 
