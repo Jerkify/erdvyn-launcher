@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.9'
+    [string]$Version = '2.1.10'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +86,6 @@ $hashes = @($installer,$zip) | ForEach-Object {
     "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $_)
 }
 Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Value $hashes -Encoding ASCII
-& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Live Minecraft launch terminal, readiness handoff, and automatic server mod add/remove sync'
+& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'NeoForge first-run installation now works without an existing Minecraft launcher profile'
 Write-Host "INSTALLER=$installer"
 Write-Host "PORTABLE=$zip"

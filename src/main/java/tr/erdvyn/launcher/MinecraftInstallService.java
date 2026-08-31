@@ -28,6 +28,7 @@ final class MinecraftInstallService {
             return;
         }
         Files.createDirectories(install);
+        ensureLauncherProfile(install);
         Path cache = LauncherPaths.appRoot().resolve("cache");Files.createDirectories(cache);
         Path installer = cache.resolve("neoforge-21.1.243-installer.jar");
         if (!Files.isRegularFile(installer) || !INSTALLER_SHA256.equals(PackService.sha256(installer))) {
@@ -47,6 +48,14 @@ final class MinecraftInstallService {
         if(process.exitValue()!=0)throw new IOException("NeoForge installation failed (exit "+process.exitValue()+"). See "+installerLog);
         if(!Files.isRegularFile(vanilla)||!Files.isRegularFile(neo)||!Files.isRegularFile(client))throw new IOException("NeoForge installer completed without the required version files");
         log.accept("INSTALLATION COMPLETE");
+    }
+
+    private static void ensureLauncherProfile(Path install) throws IOException {
+        Path profile = install.resolve("launcher_profiles.json");
+        Path storeProfile = install.resolve("launcher_profiles_microsoft_store.json");
+        if (!Files.isRegularFile(profile) && !Files.isRegularFile(storeProfile)) {
+            Files.writeString(profile, "{\"profiles\":{}}\n");
+        }
     }
 
     private static Path findInstallerJava() throws IOException {

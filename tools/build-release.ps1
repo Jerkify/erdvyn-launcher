@@ -1,6 +1,6 @@
 param(
     [switch]$SkipVideos,
-    [string]$Version = '2.1.9'
+    [string]$Version = '2.1.10'
 )
 $ErrorActionPreference='Stop'
 $projectRoot=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
