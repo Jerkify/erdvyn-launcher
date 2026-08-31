@@ -16,7 +16,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class LauncherUpdateService {
-    static final String CURRENT_VERSION = "2.1.10";
+    static final String CURRENT_VERSION = "2.1.11";
     record Update(String version, URI installerUri, String sha256, String notes) {}
 
     private static final ObjectMapper JSON = new ObjectMapper();

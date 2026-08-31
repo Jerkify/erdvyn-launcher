@@ -50,10 +50,10 @@ final class MinecraftLaunchService {
 
 
 
-        Path profileJar = install.resolve("versions").resolve(LauncherPaths.NEOFORGE_VERSION)
-                .resolve(LauncherPaths.NEOFORGE_VERSION + ".jar");
-        if (!Files.isRegularFile(profileJar)) throw new IOException("NeoForge profile jar is missing: " + profileJar);
-        classpathFiles.add(profileJar);
+        Path clientJar = install.resolve("versions").resolve(LauncherPaths.GAME_VERSION)
+                .resolve(LauncherPaths.GAME_VERSION + ".jar");
+        if (!Files.isRegularFile(clientJar)) throw new IOException("Minecraft client jar is missing: " + clientJar);
+        classpathFiles.add(clientJar);
 
         List<Path> missing = classpathFiles.stream().filter(path -> !Files.isRegularFile(path)).toList();
         if (!missing.isEmpty()) throw new IOException("Missing Minecraft library: " + missing.get(0) + " (" + missing.size() + " total)");
@@ -161,7 +161,7 @@ final class MinecraftLaunchService {
         values.put("${version_type}", "release");
         values.put("${natives_directory}", natives.toString());
         values.put("${launcher_name}", "ErdvynLauncher");
-        values.put("${launcher_version}", "2.1.10");
+        values.put("${launcher_version}", "2.1.11");
         values.put("${classpath}", classpath);
         values.put("${classpath_separator}", System.getProperty("path.separator"));
         values.put("${library_directory}", libraries.toString());

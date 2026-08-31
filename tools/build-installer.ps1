@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.10'
+    [string]$Version = '2.1.11'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +86,6 @@ $hashes = @($installer,$zip) | ForEach-Object {
     "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $_)
 }
 Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Value $hashes -Encoding ASCII
-& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'NeoForge first-run installation now works without an existing Minecraft launcher profile'
+& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Minecraft and NeoForge first-run downloads now retry slow Mojang connections'
 Write-Host "INSTALLER=$installer"
 Write-Host "PORTABLE=$zip"
