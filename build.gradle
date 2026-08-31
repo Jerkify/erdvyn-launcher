@@ -1,0 +1,70 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+group = 'tr.erdvyn'
+version = '2.1.9'
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.2'
+    implementation 'net.raphimc:MinecraftAuth:5.0.2'
+    implementation 'net.java.dev.jna:jna-platform:5.19.1'
+}
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+application {
+    mainClass = 'tr.erdvyn.launcher.ErdvynLauncher'
+    applicationDefaultJvmArgs = ['-Dprism.order=d3d,sw']
+}
+
+tasks.register('verifyManagedPack', JavaExec) {
+    group = 'verification'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'tr.erdvyn.launcher.PackVerifierCli'
+}
+
+tasks.register('compileMinecraftLaunchProbe', JavaCompile) {
+    source = file('tools/MinecraftLaunchProbe.java')
+    classpath = sourceSets.main.runtimeClasspath
+    destinationDirectory = layout.buildDirectory.dir('probe-classes')
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('minecraftLaunchProbe', JavaExec) {
+    group = 'verification'
+    dependsOn classes, compileMinecraftLaunchProbe
+    classpath = files(layout.buildDirectory.dir('probe-classes')) + sourceSets.main.runtimeClasspath
+    mainClass = 'tr.erdvyn.launcher.MinecraftLaunchProbe'
+}
+
+tasks.register('compileApiTicketProbe', JavaCompile) {
+    source = file('tools/ApiTicketProbe.java')
+    classpath = sourceSets.main.runtimeClasspath
+    destinationDirectory = layout.buildDirectory.dir('api-probe-classes')
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('apiTicketProbe', JavaExec) {
+    group = 'verification'
+    dependsOn classes, compileApiTicketProbe
+    classpath = files(layout.buildDirectory.dir('api-probe-classes')) + sourceSets.main.runtimeClasspath
+    mainClass = 'tr.erdvyn.launcher.ApiTicketProbe'
+    args project.findProperty('manifestSha') ?: '', project.findProperty('ticketOutput') ?: ''
+}
+
+javafx {
+    version = '21.0.7'
+    modules = ['javafx.graphics', 'javafx.media', 'javafx.swing']
+}
+
+jar {
+    archiveBaseName = 'ErdvynLauncher'
+    manifest { attributes 'Main-Class': application.mainClass.get() }
+}

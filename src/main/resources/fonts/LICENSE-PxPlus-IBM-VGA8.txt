@@ -1,0 +1,10 @@
+PxPlus IBM VGA8
+
+Font design/remake by VileR, from The Ultimate Oldschool PC Font Pack.
+Source: https://int10h.org/oldschool-pc-fonts/
+Bundled font file mirror: https://github.com/pocketfood/Fontpkg-PxPlus_IBM_VGA8
+
+Licensed under Creative Commons Attribution-ShareAlike 4.0 International:
+https://creativecommons.org/licenses/by-sa/4.0/
+
+This launcher distribution includes the unmodified PxPlus_IBM_VGA8.ttf file.

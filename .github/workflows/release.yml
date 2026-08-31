@@ -1,0 +1,49 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+      - name: package
+        shell: pwsh
+        run: .\tools\build-release.ps1 -SkipVideos -Version $env:RELEASE_VERSION
+      - uses: actions/upload-artifact@v4
+        with:
+          name: erdvyn-launcher-${{ env.RELEASE_VERSION }}
+          path: |
+            build/dist/Erdvyn-Launcher-Setup-${{ env.RELEASE_VERSION }}.exe
+            build/dist/Erdvyn-Launcher-Portable-${{ env.RELEASE_VERSION }}.zip
+            build/dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "build/dist/Erdvyn-Launcher-Setup-$env:RELEASE_VERSION.exe" `
+            "build/dist/Erdvyn-Launcher-Portable-$env:RELEASE_VERSION.zip" `
+            "build/dist/SHA256SUMS.txt" `
+            --generate-notes
