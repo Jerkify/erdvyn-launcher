@@ -20,15 +20,12 @@ final class LauncherPaths {
     }
 
     static Path managedInstance() { return appRoot().resolve("instances").resolve("the-frontier"); }
-    static Path curseForgeInstall() { return Path.of(System.getProperty("user.home"), "curseforge", "minecraft", "Install"); }
     static Path managedInstall() { return appRoot().resolve("minecraft"); }
 
 
     static Path gameDirectory() { return managedInstance(); }
 
-    static Path minecraftInstall() {
-        return Files.isDirectory(curseForgeInstall().resolve("versions")) ? curseForgeInstall() : managedInstall();
-    }
+    static Path minecraftInstall() { return managedInstall(); }
 
     static String serverAddress() {
         return LauncherConfig.serverAddress();

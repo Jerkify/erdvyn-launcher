@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'tr.erdvyn'
-version = '2.1.11'
+version = '2.1.12'
 
 repositories { mavenCentral() }
 
@@ -42,6 +42,20 @@ tasks.register('minecraftLaunchProbe', JavaExec) {
     dependsOn classes, compileMinecraftLaunchProbe
     classpath = files(layout.buildDirectory.dir('probe-classes')) + sourceSets.main.runtimeClasspath
     mainClass = 'tr.erdvyn.launcher.MinecraftLaunchProbe'
+}
+
+tasks.register('compileMinecraftInstallProbe', JavaCompile) {
+    source = file('tools/MinecraftInstallProbe.java')
+    classpath = sourceSets.main.runtimeClasspath
+    destinationDirectory = layout.buildDirectory.dir('install-probe-classes')
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('minecraftInstallProbe', JavaExec) {
+    group = 'verification'
+    dependsOn classes, compileMinecraftInstallProbe
+    classpath = files(layout.buildDirectory.dir('install-probe-classes')) + sourceSets.main.runtimeClasspath
+    mainClass = 'tr.erdvyn.launcher.MinecraftInstallProbe'
 }
 
 tasks.register('compileApiTicketProbe', JavaCompile) {

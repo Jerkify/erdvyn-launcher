@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.11'
+    [string]$Version = '2.1.12'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +86,6 @@ $hashes = @($installer,$zip) | ForEach-Object {
     "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $_)
 }
 Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Value $hashes -Encoding ASCII
-& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Minecraft and NeoForge first-run downloads now retry slow Mojang connections'
+& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Minecraft and NeoForge runtime files now install and repair automatically'
 Write-Host "INSTALLER=$installer"
 Write-Host "PORTABLE=$zip"

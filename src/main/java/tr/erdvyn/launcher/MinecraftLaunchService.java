@@ -161,7 +161,7 @@ final class MinecraftLaunchService {
         values.put("${version_type}", "release");
         values.put("${natives_directory}", natives.toString());
         values.put("${launcher_name}", "ErdvynLauncher");
-        values.put("${launcher_version}", "2.1.11");
+        values.put("${launcher_version}", "2.1.12");
         values.put("${classpath}", classpath);
         values.put("${classpath_separator}", System.getProperty("path.separator"));
         values.put("${library_directory}", libraries.toString());
