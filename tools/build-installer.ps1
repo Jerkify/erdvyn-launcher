@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.13'
+    [string]$Version = '2.1.14'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +86,6 @@ $hashes = @($installer,$zip) | ForEach-Object {
     "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $_)
 }
 Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Value $hashes -Encoding ASCII
-& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'NeoForge launches with the complete Java runtime and a conflict-free classpath'
+& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Minecraft uses a locale-safe runtime on Turkish Windows installations'
 Write-Host "INSTALLER=$installer"
 Write-Host "PORTABLE=$zip"

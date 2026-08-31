@@ -43,7 +43,7 @@ final class MicrosoftAccountService {
     }
 
     synchronized Session login(Consumer<MsaDeviceCode> codeConsumer) throws Exception {
-        manager = JavaAuthManager.create(MinecraftAuth.createHttpClient("Erdvyn-Launcher/2.1.13"))
+        manager = JavaAuthManager.create(MinecraftAuth.createHttpClient("Erdvyn-Launcher/2.1.14"))
                 .login(DeviceCodeMsaAuthService::new, codeConsumer);
         Session result;
         try {
@@ -66,7 +66,7 @@ final class MicrosoftAccountService {
         try {
             byte[] encrypted = Files.readAllBytes(tokenFile);
             byte[] json = Crypt32Util.cryptUnprotectData(encrypted);
-            manager = JavaAuthManager.fromJson(MinecraftAuth.createHttpClient("Erdvyn-Launcher/2.1.13"),
+            manager = JavaAuthManager.fromJson(MinecraftAuth.createHttpClient("Erdvyn-Launcher/2.1.14"),
                     JsonParser.parseString(new String(json, StandardCharsets.UTF_8)).getAsJsonObject());
         } catch (Exception ignored) { manager = null; }
     }

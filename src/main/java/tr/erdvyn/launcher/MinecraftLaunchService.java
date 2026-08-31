@@ -62,6 +62,9 @@ final class MinecraftLaunchService {
         command.add("-Xmx" + Math.max(2, Math.min(16, ramGb)) + "G");
         command.add("-XX:+UseG1GC");
         command.add("-Dfile.encoding=UTF-8");
+        command.add("-Duser.language=en");
+        command.add("-Duser.country=US");
+        command.add("-Duser.variant=");
         if(erdvynTicket!=null&&!erdvynTicket.isBlank())command.add("-Derdvyn.sessionTicket="+erdvynTicket);
         appendArguments(command, vanilla.path("arguments").path("jvm"), variables, autoConnect);
         appendArguments(command, neo.path("arguments").path("jvm"), variables, autoConnect);
@@ -156,7 +159,7 @@ final class MinecraftLaunchService {
         values.put("${version_type}", "release");
         values.put("${natives_directory}", natives.toString());
         values.put("${launcher_name}", "ErdvynLauncher");
-        values.put("${launcher_version}", "2.1.13");
+        values.put("${launcher_version}", "2.1.14");
         values.put("${classpath}", classpath);
         values.put("${classpath_separator}", System.getProperty("path.separator"));
         values.put("${library_directory}", libraries.toString());

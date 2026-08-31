@@ -33,7 +33,7 @@ final class MinecraftSkinService {
         HttpRequest profileRequest = HttpRequest.newBuilder(URI.create("https://api.minecraftservices.com/minecraft/profile"))
                 .timeout(Duration.ofSeconds(20))
                 .header("Authorization", "Bearer " + session.accessToken())
-                .header("User-Agent", "Erdvyn-Launcher/2.1.13")
+                .header("User-Agent", "Erdvyn-Launcher/2.1.14")
                 .GET().build();
         HttpResponse<String> profileResponse = http.send(profileRequest, HttpResponse.BodyHandlers.ofString());
         if (profileResponse.statusCode() / 100 != 2) throw new IllegalStateException("Minecraft profile HTTP " + profileResponse.statusCode());
