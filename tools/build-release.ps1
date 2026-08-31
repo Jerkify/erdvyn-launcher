@@ -1,6 +1,6 @@
 param(
     [switch]$SkipVideos,
-    [string]$Version = '2.1.12'
+    [string]$Version = '2.1.13'
 )
 $ErrorActionPreference='Stop'
 $projectRoot=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -30,7 +30,7 @@ try {
     & "$javaRoot\bin\java.exe" -cp (Join-Path $work 'icon-tool') IconGenerator (Join-Path $projectRoot 'src\main\resources\assets\erdvyn-logo.png') $iconPng
     & "$javaRoot\bin\java.exe" -cp (Join-Path $work 'icon-tool') IconGenerator (Join-Path $projectRoot 'src\main\resources\assets\erdvyn-logo.png') $iconIco
     if(Test-Path -LiteralPath $runtime){Remove-Item -LiteralPath $runtime -Recurse -Force}
-    $modules='java.base,java.datatransfer,java.desktop,java.logging,java.management,java.naming,java.net.http,java.prefs,java.security.jgss,java.sql,java.xml,jdk.charsets,jdk.crypto.ec,jdk.unsupported,jdk.zipfs,javafx.base,javafx.graphics,javafx.media,javafx.swing'
+    $modules=((Get-ChildItem -LiteralPath "$javaRoot\jmods" -Filter '*.jmod' -File | ForEach-Object BaseName) + @('javafx.base','javafx.graphics','javafx.media','javafx.swing')) -join ','
     & "$javaRoot\bin\jlink.exe" --module-path "$javaRoot\jmods;$input" --add-modules $modules --strip-debug --no-header-files --no-man-pages --compress zip-6 --output $runtime
     if($LASTEXITCODE -ne 0){throw 'Runtime image build failed'}
     $appImage=Join-Path $release 'Erdvyn Launcher'

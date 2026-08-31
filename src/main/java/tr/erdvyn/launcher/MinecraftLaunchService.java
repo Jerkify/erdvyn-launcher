@@ -50,11 +50,6 @@ final class MinecraftLaunchService {
 
 
 
-        Path clientJar = install.resolve("versions").resolve(LauncherPaths.GAME_VERSION)
-                .resolve(LauncherPaths.GAME_VERSION + ".jar");
-        if (!Files.isRegularFile(clientJar)) throw new IOException("Minecraft client jar is missing: " + clientJar);
-        classpathFiles.add(clientJar);
-
         List<Path> missing = classpathFiles.stream().filter(path -> !Files.isRegularFile(path)).toList();
         if (!missing.isEmpty()) throw new IOException("Missing Minecraft library: " + missing.get(0) + " (" + missing.size() + " total)");
         String classpath = String.join(System.getProperty("path.separator"), classpathFiles.stream().map(Path::toString).toList());
@@ -161,7 +156,7 @@ final class MinecraftLaunchService {
         values.put("${version_type}", "release");
         values.put("${natives_directory}", natives.toString());
         values.put("${launcher_name}", "ErdvynLauncher");
-        values.put("${launcher_version}", "2.1.12");
+        values.put("${launcher_version}", "2.1.13");
         values.put("${classpath}", classpath);
         values.put("${classpath_separator}", System.getProperty("path.separator"));
         values.put("${library_directory}", libraries.toString());
