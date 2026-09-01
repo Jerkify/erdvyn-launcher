@@ -288,6 +288,7 @@ public final class ErdvynLauncher {
         private boolean hoverPlay, hoverLanguage, hoverUpdate, hoverProfile, profileOpen, autoUpdate = true, autoConnect = true, closeAfterLaunch = true;
         private boolean hoverAudio, volumeDragging, hoverVerify, hoverFolder, packVerifying, chatFocused,bootActive,bootCompleteSound,launcherBootMode,launcherReady=true,cameraVideoSwitched;
         private boolean accountLoginInProgress,launchAfterLogin,pendingGameLaunch,gameLaunching,launchOverlayActive,launchFailed,backendPollInProgress,newsComposeOpen,newsPublishInProgress,notificationsOpen,packInstalled;
+        private volatile boolean launcherUpdateCheckInProgress;
         private boolean draggingWindow, resizingWindow;
         private Point windowActionStart;
         private Rectangle windowStartBounds;
@@ -311,6 +312,8 @@ public final class ErdvynLauncher {
         private long lastBackendPollMillis;
         private long lastNewsFetchMillis;
         private long lastAdminFetchMillis;
+        private long lastLauncherUpdateCheckMillis;
+        private String lastLauncherUpdateError="";
         private String accountNotice = "";
         private String adminTargetDraft="",adminCommandDraft="",adminNotice="";
         private int adminField;
@@ -515,6 +518,7 @@ public final class ErdvynLauncher {
 
             audioBounds=new Rectangle((SIDEBAR-38)/2,h-62,38,42);
             int sliderLength=(int)(120*volumeReveal);if(sliderLength>5){volumeBounds=new Rectangle(61,h-55,sliderLength+8,28);g.setColor(LINE);g.drawRect(volumeBounds.x,volumeBounds.y,sliderLength+6,22);int fill=(int)((sliderLength-4)*video.volume());g.setColor(AMBER);for(int sx=0;sx<fill;sx+=7)g.fillRect(volumeBounds.x+4+sx,volumeBounds.y+5,4,12);}else volumeBounds.setBounds(0,0,0,0);paintSpeakerIcon(g,audioBounds.x+19,audioBounds.y+21,video.isMuted(),hoverAudio?AMBER_HOT:PAPER,hoverAudio);
+            g.setFont(font(9,Font.PLAIN));g.setColor(MUTED);String launcherVersion=(sidebarExpand>.45?"LAUNCHER ":"v")+LauncherUpdateService.CURRENT_VERSION;g.drawString(launcherVersion,sidebarExpand>.45?14:Math.max(8,(SIDEBAR-g.getFontMetrics().stringWidth(launcherVersion))/2),h-72);
 
             String profileName=accountSession==null?l("GİRİŞ YOK","SIGNED OUT"):accountSession.name();String authState=accountSession==null?l("GEREKLİ","REQUIRED"):l("BAĞLI","LINKED");
             int profileW=242,profileX=w-454;profileBounds.setBounds(profileX,12,profileW,44);g.setColor(LINE);g.drawRect(profileX,12,profileW,44);if(playerHead!=null){g.drawImage(playerHead,profileX+6,17,34,34,null);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}else{g.setColor(new Color(255,145,42,36));g.fillRect(profileX+6,17,34,34);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("KULL:","USER:"),profileX+49,30);g.setColor(PAPER);g.drawString(profileName,profileX+100,30);g.setColor(MUTED);g.drawString(l("YETKİ:","AUTH:"),profileX+49,47);g.setColor(accountSession==null?AMBER:PAPER);g.drawString(authState,profileX+100,47);
@@ -799,7 +803,7 @@ public final class ErdvynLauncher {
                 p.angle = .55 + sway * .72 + Math.sin(time * .31 + p.phase) * .18;
                 if (p.x > 1.04 || p.y > 1.04) { p.y = -.04 - random.nextDouble() * .2; p.x = -.06 + random.nextDouble() * .72; }
             }
-            advanceBoot();pollBackendIfDue();if(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&time>=nextCameraGlitchAt)triggerCameraGlitch(4.2+random.nextDouble()*.9);double cameraGlitch=cameraGlitchStrength();double glitchPhase=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);if(cameraGlitch>0&&!cameraVideoSwitched&&glitchPhase>=.24){cameraVideoSwitched=true;video.switchToDifferentVideo();}frame.applyVideoJitter(0,0);video.setUiGate(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&cameraGlitch<.035&&video.isReady());advanceUpdate(); displayedProgress += (targetProgress - displayedProgress) * .075;launchDisplayedProgress+=(launchTargetProgress-launchDisplayedProgress)*.085;
+            advanceBoot();pollBackendIfDue();pollLauncherUpdateIfDue();if(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&time>=nextCameraGlitchAt)triggerCameraGlitch(4.2+random.nextDouble()*.9);double cameraGlitch=cameraGlitchStrength();double glitchPhase=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);if(cameraGlitch>0&&!cameraVideoSwitched&&glitchPhase>=.24){cameraVideoSwitched=true;video.switchToDifferentVideo();}frame.applyVideoJitter(0,0);video.setUiGate(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&cameraGlitch<.035&&video.isReady());advanceUpdate(); displayedProgress += (targetProgress - displayedProgress) * .075;launchDisplayedProgress+=(launchTargetProgress-launchDisplayedProgress)*.085;
             repaint();
         }
 
@@ -1001,7 +1005,8 @@ public final class ErdvynLauncher {
         private static String shortError(Throwable error){Throwable current=error;while(current.getCause()!=null&&current.getCause()!=current)current=current.getCause();String text=current.getMessage();if(text==null||text.isBlank())text=current.getClass().getSimpleName();return text.length()>110?text.substring(0,107)+"...":text;}
         private String loginError(Throwable error){String raw=shortError(error),lower=raw.toLowerCase(Locale.ROOT);if(lower.contains("does not own minecraft")||lower.contains("no java profile")||lower.contains("entitlement")||lower.contains("minecraft profile"))return l("Microsoft girişi tamamlandı fakat bu hesap Minecraft: Java Edition sahibi değil veya Java profili oluşturulmamış.","Microsoft sign-in completed, but this account does not own Minecraft: Java Edition or has no Java profile.");return raw;}
         private void loadPlayerHead(MicrosoftAccountService.Session session){try{BufferedImage loaded=skinService.head(session);if(loaded!=null)SwingUtilities.invokeLater(()->{playerHead=loaded;repaint();});}catch(Exception ignored){}}
-        private void checkLauncherUpdateAsync(){if(LauncherConfig.launcherManifestUrl().isBlank())return;Thread.startVirtualThread(()->{try{LauncherUpdateService.Update found=launcherUpdateService.check();if(found==null)return;Path downloaded=launcherUpdateService.download(found);SwingUtilities.invokeLater(()->{launcherUpdate=found;launcherInstaller=downloaded;notifications.add(String.format(Locale.ROOT,l("Launcher %s hazır. Bildirim panelinden kurabilirsin.","Launcher %s is ready. Install it from notifications."),found.version()));repaint();});}catch(Exception ex){SwingUtilities.invokeLater(()->{notifications.add(l("Launcher güncellemesi denetlenemedi: ","Launcher update check failed: ")+shortError(ex));repaint();});}});}
+        private void pollLauncherUpdateIfDue(){long now=System.currentTimeMillis();if(launcherInstaller==null&&!launcherUpdateCheckInProgress&&now-lastLauncherUpdateCheckMillis>=300_000L)checkLauncherUpdateAsync();}
+        private void checkLauncherUpdateAsync(){if(launcherUpdateCheckInProgress||LauncherConfig.launcherGithubRepository().isBlank()&&LauncherConfig.launcherManifestUrl().isBlank())return;launcherUpdateCheckInProgress=true;lastLauncherUpdateCheckMillis=System.currentTimeMillis();Thread.startVirtualThread(()->{try{LauncherUpdateService.Update found=launcherUpdateService.check();if(found==null)return;Path downloaded=launcherUpdateService.download(found);SwingUtilities.invokeLater(()->{launcherUpdate=found;launcherInstaller=downloaded;lastLauncherUpdateError="";notifications.add(String.format(Locale.ROOT,l("Launcher %s GitHub'dan indirildi. Bildirim panelinden kurabilirsin.","Launcher %s was downloaded from GitHub. Install it from notifications."),found.version()));repaint();});}catch(Exception ex){String error=shortError(ex);SwingUtilities.invokeLater(()->{if(!error.equals(lastLauncherUpdateError)){lastLauncherUpdateError=error;notifications.add(l("Launcher güncellemesi denetlenemedi: ","Launcher update check failed: ")+error);}repaint();});}finally{launcherUpdateCheckInProgress=false;}});}
         private void launchPreparedUpdate(){if(launcherInstaller==null||!Files.isRegularFile(launcherInstaller))return;try{Desktop.getDesktop().open(launcherInstaller.toFile());frame.shutdownAndExit();}catch(Exception ex){accountNotice=l("GÜNCELLEME HATASI: ","UPDATE ERROR: ")+shortError(ex);repaint();}}
         private void sendChat(){String message=chatDraft.strip();if(message.isEmpty())return;playUiSound(112);if(hub.connected())hub.sendChat(message);else chatLines.add(new ChatLine("SYSTEM",language==Language.TR?"Sohbet sunucusuna bağlı değilsin.":"Not connected to the chat server.",LocalTime.now()));chatDraft="";repaint();}
 

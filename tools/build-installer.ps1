@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.15'
+    [string]$Version = '2.1.16'
 )
 
 $ErrorActionPreference = 'Stop'

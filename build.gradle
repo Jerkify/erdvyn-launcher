@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'tr.erdvyn'
-version = '2.1.15'
+version = providers.environmentVariable('RELEASE_VERSION').orElse('2.1.16').get()
 
 repositories { mavenCentral() }
 
@@ -26,6 +26,12 @@ java {
 application {
     mainClass = 'tr.erdvyn.launcher.ErdvynLauncher'
     applicationDefaultJvmArgs = ['-Dprism.order=d3d,sw']
+}
+
+processResources {
+    filesMatching('launcher-version.properties') {
+        expand launcher_version: project.version
+    }
 }
 
 tasks.register('verifyManagedPack', JavaExec) {
