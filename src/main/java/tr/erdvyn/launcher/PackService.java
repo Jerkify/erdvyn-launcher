@@ -16,6 +16,7 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.HashSet;
@@ -32,6 +33,7 @@ final class PackService {
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String INSTALL_STATE = ".erdvyn-installed.json";
+    private static final String CLEANUP_STATE = ".erdvyn-pack-cleanups.json";
     private static final Set<String> PRESERVED_FILES = Set.of(
             "options.txt", "servers.dat", "servers.dat_old", "command_history.txt",
             "patchouli_data.json", "ponders_watched.json", "trashslotsavestate.json",
@@ -60,6 +62,7 @@ final class PackService {
         JsonNode files = root.path("files");
         if (!files.isArray()) throw new IOException("Manifest files array is missing");
         Path game = LauncherPaths.gameDirectory().toAbsolutePath().normalize();
+        removeRequestedPaths(game, root, LauncherPaths.appRoot().resolve(CLEANUP_STATE), progress);
         int total = files.size(), verified = 0, downloaded = 0, kept = 0, failed = 0, index = 0;
         Set<Path> managedFiles = new HashSet<>();
         for (JsonNode entry : files) {
@@ -255,6 +258,61 @@ final class PackService {
             if (isUnderRoot(path, normalizeManifestPath(root.asText()))) return true;
         }
         return false;
+    }
+
+    static void removeRequestedPaths(Path game, JsonNode manifest, Consumer<Progress> progress) throws IOException {
+        removeRequestedPaths(game, manifest, null, progress);
+    }
+
+    static void removeRequestedPaths(Path game, JsonNode manifest, Path cleanupState, Consumer<Progress> progress) throws IOException {
+        Path root = game.toAbsolutePath().normalize();
+        JsonNode paths = manifest.path("remove_paths");
+        if (!paths.isArray()) return;
+        String cleanupId = manifest.path("cleanup_id").asText("").strip();
+        Set<String> completed = readCompletedCleanups(cleanupState);
+        if (!cleanupId.isBlank() && completed.contains(cleanupId)) return;
+        for (JsonNode value : paths) {
+            String relative = normalizeManifestPath(value.asText());
+            if (!isAllowedRemovalPath(relative)) throw new IOException("Unsafe pack removal path: " + value.asText());
+            Path target = root.resolve(relative).normalize();
+            if (!target.startsWith(root) || target.equals(root)) throw new IOException("Unsafe pack removal path: " + value.asText());
+            if (!Files.exists(target)) continue;
+            try (var stream = Files.walk(target)) {
+                for (Path path : stream.sorted(Comparator.reverseOrder()).toList()) Files.deleteIfExists(path);
+            }
+            progress.accept(new Progress(.03, "[REMOVED] " + relative));
+        }
+        if (!cleanupId.isBlank() && cleanupState != null) {
+            completed.add(cleanupId);
+            writeCompletedCleanups(cleanupState, completed);
+        }
+    }
+
+    private static Set<String> readCompletedCleanups(Path state) throws IOException {
+        Set<String> completed = new HashSet<>();
+        if (state == null || !Files.isRegularFile(state)) return completed;
+        JsonNode values = JSON.readTree(state.toFile()).path("completed");
+        if (values.isArray()) for (JsonNode value : values) if (!value.asText().isBlank()) completed.add(value.asText());
+        return completed;
+    }
+
+    private static void writeCompletedCleanups(Path state, Set<String> completed) throws IOException {
+        Files.createDirectories(state.getParent());
+        ObjectNode root = JSON.createObjectNode();
+        var values = root.putArray("completed");
+        completed.stream().sorted().forEach(values::add);
+        Path temp = state.resolveSibling(state.getFileName() + ".tmp");
+        JSON.writerWithDefaultPrettyPrinter().writeValue(temp.toFile(), root);
+        try {
+            Files.move(temp, state, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException atomicMoveUnsupported) {
+            Files.move(temp, state, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static boolean isAllowedRemovalPath(String path) {
+        if (path.isBlank() || path.contains("../") || path.equals("..")) return false;
+        return isUnderRoot(path, "mods") || isUnderRoot(path, "config") || isUnderRoot(path, "defaultconfigs") || isUnderRoot(path, "resourcepacks") || isUnderRoot(path, "shaderpacks") || isUnderRoot(path, "kubejs");
     }
 
     private static boolean containsPath(JsonNode paths, String expected) {

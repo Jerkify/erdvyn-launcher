@@ -1,6 +1,6 @@
 param(
     [string]$AppImage,
-    [string]$Version = '2.1.16'
+    [string]$Version = '2.1.17'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,6 +86,6 @@ $hashes = @($installer,$zip) | ForEach-Object {
     "{0}  {1}" -f $hash.Hash.ToLowerInvariant(), (Split-Path -Leaf $_)
 }
 Set-Content -LiteralPath (Join-Path $dist 'SHA256SUMS.txt') -Value $hashes -Encoding ASCII
-& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Player graphics, controls and mod settings are preserved between launches'
+& (Join-Path $PSScriptRoot 'New-LauncherManifest.ps1') -Installer $installer -Version $Version -ReleaseNotes 'Removed mod files and stale configuration data are cleaned safely during pack updates'
 Write-Host "INSTALLER=$installer"
 Write-Host "PORTABLE=$zip"
