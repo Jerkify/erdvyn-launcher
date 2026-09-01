@@ -19,18 +19,29 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 
 final class PackService {
     record Progress(double value, String line) {}
-    record Result(int verified, int downloaded, int failed, String version) {}
+    record Result(int verified, int downloaded, int kept, int failed, String version) {}
     record Summary(int files, int mods, int configs, int resourcepacks, int shaderpacks, long bytes, String version) {
         static Summary empty() { return new Summary(0, 0, 0, 0, 0, 0, "--"); }
     }
 
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String INSTALL_STATE = ".erdvyn-installed.json";
+    private static final Set<String> PRESERVED_FILES = Set.of(
+            "options.txt", "servers.dat", "servers.dat_old", "command_history.txt",
+            "patchouli_data.json", "ponders_watched.json", "trashslotsavestate.json",
+            "usernamecache.json", "usercache.json", "vss-lod-presence.dat"
+    );
+    private static final List<String> PRESERVED_ROOTS = List.of(
+            ".sable", ".voxy", "blueprints", "datapacks", "dynamic-data-pack-cache",
+            "dynamic-resource-pack-cache", "emotes", "figura", "moddata", "profileimage",
+            "schematics", "xaero", "xaerowaypoints_backup240807"
+    );
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).followRedirects(HttpClient.Redirect.NORMAL).build();
 
     Result verifyAndRepair(Consumer<Progress> progress) throws Exception {
@@ -49,7 +60,7 @@ final class PackService {
         JsonNode files = root.path("files");
         if (!files.isArray()) throw new IOException("Manifest files array is missing");
         Path game = LauncherPaths.gameDirectory().toAbsolutePath().normalize();
-        int total = files.size(), verified = 0, downloaded = 0, failed = 0, index = 0;
+        int total = files.size(), verified = 0, downloaded = 0, kept = 0, failed = 0, index = 0;
         Set<Path> managedFiles = new HashSet<>();
         for (JsonNode entry : files) {
             index++;
@@ -58,6 +69,11 @@ final class PackService {
             if (relative.isBlank() || !target.startsWith(game)) throw new IOException("Unsafe manifest path: " + relative);
             managedFiles.add(target);
             double base = .04 + .94 * (index - 1) / Math.max(1, total);
+            if (Files.isRegularFile(target) && shouldPreserveExisting(root, entry, relative)) {
+                kept++;
+                progress.accept(new Progress(base, "[KEEP] " + relative));
+                continue;
+            }
             if (Files.isRegularFile(target) && !expected.isBlank() && expected.equals(sha256(target))) {
                 verified++;
                 progress.accept(new Progress(base, "[OK] " + relative));
@@ -98,7 +114,7 @@ final class PackService {
         }
         progress.accept(new Progress(1, failed == 0 ? "PACKAGE VERIFIED" : "PACKAGE HAS " + failed + " ERRORS"));
         if (failed == 0) writeInstallState(version, cachedManifest, total);
-        return new Result(verified, downloaded, failed, version);
+        return new Result(verified, downloaded, kept, failed, version);
     }
 
     boolean isInstalled() {
@@ -225,6 +241,37 @@ final class PackService {
     static String activeManifestSha256() throws Exception {
         Path remote=LauncherPaths.appRoot().resolve("active-pack-manifest.json"),local=LauncherPaths.appRoot().resolve("local-pack-audit.json");
         Path selected=Files.isRegularFile(remote)?remote:local;if(!Files.isRegularFile(selected))throw new IOException("No verified pack manifest is available");return sha256(selected);
+    }
+
+    static boolean shouldPreserveExisting(JsonNode manifest, JsonNode entry, String relative) {
+        String path = normalizeManifestPath(relative);
+        if (path.isBlank()) return false;
+        if (entry.path("managed").asBoolean(false) || containsPath(manifest.path("managed_paths"), path)) return false;
+        if (PRESERVED_FILES.contains(path)) return true;
+        for (String root : PRESERVED_ROOTS) if (isUnderRoot(path, root)) return true;
+        if (isUnderRoot(path, "config")) return true;
+        JsonNode preserveRoots = manifest.path("preserve_roots");
+        if (preserveRoots.isArray()) for (JsonNode root : preserveRoots) {
+            if (isUnderRoot(path, normalizeManifestPath(root.asText()))) return true;
+        }
+        return false;
+    }
+
+    private static boolean containsPath(JsonNode paths, String expected) {
+        if (!paths.isArray()) return false;
+        for (JsonNode path : paths) if (expected.equals(normalizeManifestPath(path.asText()))) return true;
+        return false;
+    }
+
+    private static boolean isUnderRoot(String path, String root) {
+        return !root.isBlank() && (path.equals(root) || path.startsWith(root + "/"));
+    }
+
+    private static String normalizeManifestPath(String path) {
+        String normalized = path == null ? "" : path.replace('\\', '/').strip().toLowerCase(Locale.ROOT);
+        while (normalized.startsWith("/")) normalized = normalized.substring(1);
+        while (normalized.endsWith("/")) normalized = normalized.substring(0, normalized.length() - 1);
+        return normalized;
     }
 
 }

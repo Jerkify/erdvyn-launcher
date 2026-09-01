@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'tr.erdvyn'
-version = '2.1.14'
+version = '2.1.15'
 
 repositories { mavenCentral() }
 
@@ -13,7 +13,11 @@ dependencies {
     implementation 'com.fasterxml.jackson.core:jackson-databind:2.22.2'
     implementation 'net.raphimc:MinecraftAuth:5.0.2'
     implementation 'net.java.dev.jna:jna-platform:5.19.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.13.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+
+test { useJUnitPlatform() }
 
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }

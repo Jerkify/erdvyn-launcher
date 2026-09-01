@@ -13,7 +13,7 @@ public final class LauncherDiagnostics {
             PackService.Result result = new PackService().verifyAndRepair(progress ->
                     System.out.printf("%3d%% %s%n", (int) (progress.value() * 100), progress.line()));
             if (result.failed() > 0) throw new IllegalStateException(result.failed() + " package files failed");
-            System.out.printf("PASS: verified=%d downloaded=%d version=%s%n", result.verified(), result.downloaded(), result.version());
+            System.out.printf("PASS: verified=%d downloaded=%d kept=%d version=%s%n", result.verified(), result.downloaded(), result.kept(), result.version());
             return;
         }
         if (args.length == 1 && "--ping-server".equals(args[0])) {
