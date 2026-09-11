@@ -16,7 +16,16 @@ final class LocalSurveyMap {
     // Accessed only by the single refresh worker; unchanged PNGs are not decoded again.
     private final Map<Path,CachedTile> cache=new HashMap<>();
     private volatile java.util.List<Tile> tiles=java.util.List.of();
-    private volatile String status="Oyunda haritayı açarak yerel senkronizasyonu başlat";
+    private volatile String dimension="",error="";
+    private volatile long updatedAt;
+    private boolean turkish=true;
+    void setTurkish(boolean value){turkish=value;}
+    String status(){
+        if(!error.isEmpty())return (turkish?"HARİTA EŞİTLEME HATASI: ":"MAP SYNC ERROR: ")+error;
+        if(dimension.isEmpty())return turkish?"Yerel eşitleme için oyunda haritayı aç":"Open the map in game to start local synchronization";
+        String name=switch(dimension){case "OVERWORLD","SURFACE"->turkish?"YERYÜZÜ":"OVERWORLD";case "THE_NETHER"->"NETHER";case "THE_END"->"END";default->dimension;};
+        return name+" / "+tiles.size()+(turkish?" BÖLGE / ":" CHUNKS / ")+(System.currentTimeMillis()-updatedAt<15000?(turkish?"CANLI EŞİTLEME":"LIVE SYNC"):(turkish?"KAYITLI":"SAVED"))+(worlds.size()>1?(turkish?" / SONRAKİ DÜNYA: BAŞLIĞA TIKLA":" / NEXT WORLD: CLICK HEADER"):"");
+    }
     private volatile boolean loading;
     private volatile java.util.List<Path> worlds=java.util.List.of();
     private volatile Path selectedWorld;
@@ -41,22 +50,22 @@ final class LocalSurveyMap {
             g.drawString(Character.toString((char)('A'+i)),Math.max(x+5,(int)(ox-20000*ratio)+5),py);
         }
         g.setColor(new Color(9,12,10,235));g.fillRect(x,y,w,25);g.setColor(new Color(227,209,172));
-        String caption=status;
+        String caption=status();
         while(caption.length()>3&&g.getFontMetrics().stringWidth(caption)>w-24)caption=caption.substring(0,caption.length()-4)+"...";
         g.drawString(caption,x+10,y+17);
-        g.setColor(new Color(9,12,10,235));g.fillRect(x,y+h-24,w,24);g.setColor(new Color(201,147,82));g.drawString("SCROLL: ZOOM   /   DRAG: PAN   /   DOUBLE CLICK: OVERVIEW",x+10,y+h-8);
+        g.setColor(new Color(9,12,10,235));g.fillRect(x,y+h-24,w,24);g.setColor(new Color(201,147,82));g.drawString(turkish?"TEKERLEK: YAKINLAŞTIR / SÜRÜKLE: KAYDIR / ÇİFT TIKLA: GENEL BAKIŞ":"SCROLL: ZOOM / DRAG: PAN / DOUBLE CLICK: OVERVIEW",x+10,y+h-8);
         g.setClip(old);
     }
     private void read(){try{
         Path root=surveyRoot;
-        if(!Files.isDirectory(root)){tiles=java.util.List.of();cache.clear();return;}
+        if(!Files.isDirectory(root)){tiles=java.util.List.of();cache.clear();dimension="";error="";return;}
         Path latest=null;long time=-1;var choices=new ArrayList<Path>();
         try(var dirs=Files.list(root)){for(Path dir:dirs.filter(Files::isDirectory).toList()){
             Path meta=dir.resolve("metadata.json");if(Files.isRegularFile(meta)){choices.add(dir);if(Files.getLastModifiedTime(meta).toMillis()>time){latest=dir;time=Files.getLastModifiedTime(meta).toMillis();}}
         }}
         choices.sort(Comparator.comparing(Path::toString));worlds=java.util.List.copyOf(choices);
         if(selectedWorld!=null&&choices.contains(selectedWorld)){latest=selectedWorld;time=Files.getLastModifiedTime(latest.resolve("metadata.json")).toMillis();}
-        if(latest==null){tiles=java.util.List.of();cache.clear();return;}
+        if(latest==null){tiles=java.util.List.of();cache.clear();dimension="";error="";return;}
         String dimension="SURFACE";
         Path metadata=latest.resolve("metadata.json");
         if(Files.size(metadata)<65536){
@@ -79,8 +88,8 @@ final class LocalSurveyMap {
                 }
                 result.add(cached.tile());
             } catch(java.io.IOException|NumberFormatException ignored) { /* Retry only this tile next refresh. */ }
-        }}cache.keySet().retainAll(seen);tiles=java.util.List.copyOf(result);displayedWorld=latest;status=dimension+" / "+tiles.size()+" CHUNKS / "+(System.currentTimeMillis()-time<15000?"SYNC LIVE":"SAVED")+(choices.size()>1?" / CLICK HEADER: NEXT WORLD":"");
-    }catch(Exception e){status="MAP SYNC: "+e.getClass().getSimpleName();}finally{loading=false;}}
+        }}cache.keySet().retainAll(seen);tiles=java.util.List.copyOf(result);displayedWorld=latest;this.dimension=dimension;updatedAt=time;error="";
+    }catch(Exception e){error=e.getClass().getSimpleName();}finally{loading=false;}}
     private double ratio(){return Math.max(1,Math.min(bounds.width-40,bounds.height-40))/40000.0*zoom;}
     boolean press(Point p){if(!bounds.contains(p))return false;
         var available=worlds;
