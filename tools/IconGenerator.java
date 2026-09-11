@@ -20,11 +20,8 @@ public final class IconGenerator {
         Graphics2D g = output.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setComposite(AlphaComposite.Clear);g.fillRect(0,0,size,size);g.setComposite(AlphaComposite.SrcOver);
-        Ellipse2D circle = new Ellipse2D.Double(inset,inset,size-inset*2.0,size-inset*2.0);
-        g.setColor(new Color(7,10,17));g.fill(circle);
-        var previous = g.getClip();g.clip(circle);g.drawImage(source,inset,inset,size-inset*2,size-inset*2,null);g.setClip(previous);
-        g.setStroke(new BasicStroke(14,BasicStroke.CAP_BUTT,BasicStroke.JOIN_MITER));g.setColor(new Color(218,184,92));g.draw(circle);
-        g.setStroke(new BasicStroke(3));g.setColor(new Color(255,224,139,190));g.draw(new Ellipse2D.Double(inset+10,inset+10,size-(inset+10)*2.0,size-(inset+10)*2.0));
+        // Preserve the transparent outline in Windows, without a black badge.
+        g.drawImage(source,inset,inset,size-inset*2,size-inset*2,null);
         g.dispose();
         if(!ico){ImageIO.write(output,"png",Path.of(args[1]).toFile());return;}
         ByteArrayOutputStream pngBytes=new ByteArrayOutputStream();ImageIO.write(output,"png",pngBytes);byte[] png=pngBytes.toByteArray();

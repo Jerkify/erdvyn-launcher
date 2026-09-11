@@ -534,7 +534,7 @@ public final class ErdvynLauncher {
 
         private void paintHome(Graphics2D g) {
             int x=contentLeft(),top=108;Rectangle feed=cameraBounds(getWidth(),getHeight());int leftW=Math.max(330,feed.x-x-30);
-            paintSectionGlyph(g,0,x,top+5);g.setFont(font(38,Font.PLAIN));g.setColor(PAPER);g.drawString("ERDVYN",x+48,top+39);g.setFont(font(17,Font.PLAIN));g.setColor(AMBER);g.drawString("THE FRONTIER",x+48,top+67);g.setColor(LINE);g.drawLine(x+48,top+82,x+leftW,top+82);
+            paintSectionGlyph(g,0,x,top+5);g.setFont(brandFont(45));g.setColor(PAPER);drawTracked(g,"ERDVYN",x+48,top+43,2.2f);g.setFont(brandFont(20));g.setColor(AMBER);drawTracked(g,"THE FRONTIER",x+49,top+70,1.4f);g.setColor(LINE);g.drawLine(x+48,top+82,x+leftW,top+82);
             int py=top+112;paintNavIcon(g,3,x+11,py-4,AMBER);terminalLabel(g,l("SİSTEM PROFİLİ","SYSTEM PROFILE"),x+30,py);terminalPanel(g,x,py+18,leftW,222);String packageData=packSummary.files()==0?l("ÖLÇÜLÜYOR","MEASURING"):String.format(Locale.ROOT,"%d MOD / %d FILE / %s",packSummary.mods(),packSummary.files(),formatBytes(packSummary.bytes()));String[][] rows={{l("MC SÜRÜMÜ","MC VERSION"),LauncherPaths.GAME_VERSION},{l("YÜKLEYİCİ","LOADER"),"NEOFORGE 21.1.243"},{l("PAKET VERİSİ","PACK DATA"),packageData},{l("DOSYA DURUMU","FILE STATUS"),packStatus.isBlank()?l("DENETİM BEKLİYOR","AUDIT PENDING"):l("DENETLENDİ","AUDITED")},{l("KURULUM","INSTANCE"),"THE-FRONTIER / MANAGED"}};for(int i=0;i<rows.length;i++){int ry=py+55+i*32;g.setFont(font(13,Font.PLAIN));g.setColor(MUTED);g.drawString(rows[i][0],x+18,ry);g.setColor(PAPER);g.drawString(rows[i][1],x+154,ry);g.setColor(new Color(255,145,42,28));g.drawLine(x+14,ry+9,x+leftW-14,ry+9);}
             int buttonY=py+270;playBounds.setBounds(x,buttonY,Math.min(280,leftW),54);String playText=gameLaunching?l("BAŞLATILIYOR","STARTING"):accountSession==null?l("GİRİŞ YAP VE OYNA","SIGN IN & PLAY"):t("play");terminalButton(g,playBounds,hoverPlay,"[ "+playText.toUpperCase(Locale.ROOT)+" ]");if(leftW>=460){g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);g.drawString(l("BAŞLATMA HATTI 01","LAUNCH BUS 01"),x+300,buttonY+22);g.setColor(AMBER);g.drawString(accountSession==null?l("HESAP GEREKLİ","ACCOUNT REQUIRED"):l("HAZIR","READY"),x+300,buttonY+44);g.setColor(LINE);g.drawLine(x+405,buttonY+39,x+leftW-8,buttonY+39);}paintClientDiagnostics(g,x,buttonY+76,leftW,getHeight()-buttonY-104);updateBounds.setBounds(0,0,0,0);
             paintServerStatus(g,feed);
@@ -700,7 +700,7 @@ public final class ErdvynLauncher {
 
         private void paintLogo(Graphics2D g, int x, int y) {
             if(logo!=null){
-                g.setColor(LINE);g.drawRect(x-4,y-4,48,48);Shape oldClip=g.getClip();g.clipRect(x,y,40,40);g.drawImage(logo,x,y,40,40,null);g.setClip(oldClip);return;
+                g.drawImage(logo,x-3,y-3,46,46,null);return;
             }
             g.setStroke(new BasicStroke(2f)); g.setColor(AMBER);
             Path2D mark = new Path2D.Double(); mark.moveTo(x + 20, y); mark.lineTo(x + 40, y + 12); mark.lineTo(x + 40, y + 36); mark.lineTo(x + 20, y + 49); mark.lineTo(x, y + 36); mark.lineTo(x, y + 12); mark.closePath(); g.draw(mark);
@@ -732,11 +732,16 @@ public final class ErdvynLauncher {
 
         private static void paintArrow(Graphics2D g, int x, int y, Color color) { g.setColor(color); g.setStroke(new BasicStroke(2.4f)); g.drawLine(x - 10, y, x + 10, y); g.drawLine(x + 3, y - 7, x + 10, y); g.drawLine(x + 3, y + 7, x + 10, y); }
         private static final Font TERMINAL_FONT=loadBundledFont("/fonts/PxPlus_IBM_VGA8.ttf");
+        private static final Font BRAND_FONT=loadBundledFont("/fonts/JuliusSansOne-Regular.ttf");
         private static final String INTERFACE_FACE=findInterfaceFace();
         private static Font loadBundledFont(String resource){try(InputStream stream=ErdvynLauncher.class.getResourceAsStream(resource)){if(stream==null)return null;Font loaded=Font.createFont(Font.TRUETYPE_FONT,stream);GraphicsEnvironment.getLocalGraphicsEnvironment().registerFont(loaded);return loaded;}catch(Exception ignored){return null;}}
         private static String findInterfaceFace(){Set<String> installed=new HashSet<>(Arrays.asList(GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames()));for(String candidate:List.of("PxPlus IBM VGA8","Consolas"))if(installed.contains(candidate))return candidate;return Font.MONOSPACED;}
         private static float readableSize(float size){return Math.max(13,Math.round(size+2));}
         private static Font font(float size, int style) {return TERMINAL_FONT!=null?TERMINAL_FONT.deriveFont(style,readableSize(size)):new Font(INTERFACE_FACE,style,Math.round(readableSize(size)));}
+        private static Font brandFont(float size){return BRAND_FONT!=null?BRAND_FONT.deriveFont(Font.PLAIN,size):new Font(Font.SERIF,Font.PLAIN,Math.round(size));}
+        private static void drawTracked(Graphics2D g,String text,float x,float y,float tracking){
+            for(int i=0;i<text.length();i++){String c=String.valueOf(text.charAt(i));g.drawString(c,x,y);x+=g.getFontMetrics().stringWidth(c)+tracking;}
+        }
         private static Font dataFont(float size,int style){return new Font("Consolas",style,Math.round(readableSize(size)));}
         private static Font cameraFont(float size,int style){return font(size,style);}
         private static void centered(Graphics2D g, String text, int cx, int baseline) { g.drawString(text, cx - g.getFontMetrics().stringWidth(text) / 2, baseline); }

@@ -1,6 +1,6 @@
 param(
     [switch]$SkipVideos,
-    [string]$Version = '2.1.17'
+    [string]$Version = '2.1.21'
 )
 $ErrorActionPreference='Stop'
 $projectRoot=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -13,12 +13,18 @@ $env:JAVA_HOME=$javaRoot
 $env:Path="$javaRoot\bin;$env:Path"
 Push-Location $projectRoot
 try {
-    & .\gradlew.bat clean installDist --no-daemon
+    $env:RELEASE_VERSION=$Version
+    & .\gradlew.bat installDist --no-daemon
     if($LASTEXITCODE -ne 0){throw 'Gradle build failed'}
     $work=Join-Path $projectRoot 'build\release-work'
     $input=Join-Path $work 'input'
     $runtime=Join-Path $work 'runtime'
     $release=Join-Path $projectRoot 'build\release'
+    foreach($target in @($input,$runtime,(Join-Path $release 'Erdvyn Launcher'))){
+        $absolute=[IO.Path]::GetFullPath($target)
+        if(-not $absolute.StartsWith([IO.Path]::GetFullPath((Join-Path $projectRoot 'build'))+'\',[StringComparison]::OrdinalIgnoreCase)){throw "Unsafe build target: $absolute"}
+    }
+    if(Test-Path -LiteralPath $input){Remove-Item -LiteralPath $input -Recurse -Force}
     New-Item -ItemType Directory -Force -Path $input,$release | Out-Null
     Copy-Item -Path (Join-Path $projectRoot 'build\install\erdvyn-launcher\lib\*') -Destination $input -Force
     $mainJar=Get-ChildItem -LiteralPath $input -Filter 'ErdvynLauncher-*.jar' | Select-Object -First 1
