@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'tr.erdvyn'
-version = providers.environmentVariable('RELEASE_VERSION').orElse('2.1.18').get()
+version = providers.environmentVariable('RELEASE_VERSION').orElse('2.1.19').get()
 
 repositories { mavenCentral() }
 
@@ -29,6 +29,7 @@ application {
 }
 
 processResources {
+    inputs.property 'launcher_version', project.version
     filesMatching('launcher-version.properties') {
         expand launcher_version: project.version
     }

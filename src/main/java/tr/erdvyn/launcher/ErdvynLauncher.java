@@ -629,7 +629,13 @@ public final class ErdvynLauncher {
             chatInputBounds.setBounds(chatX+12,panelY+panelH-52,chatW-132,36);chatSendBounds.setBounds(chatX+chatW-110,panelY+panelH-52,98,36);g.setColor(chatFocused?AMBER:LINE);g.drawRect(chatInputBounds.x,chatInputBounds.y,chatInputBounds.width,chatInputBounds.height);g.setFont(font(11,Font.PLAIN));g.setColor(chatDraft.isBlank()?MUTED:PAPER);g.drawString("> "+(chatDraft.isBlank()?t("writeMessage"):chatDraft+((int)(time*2)%2==0&&chatFocused?"_":"")),chatInputBounds.x+10,chatInputBounds.y+23);terminalButton(g,chatSendBounds,false,"[ "+t("send")+" ]");
         }
 
+        private final LocalSurveyMap localSurvey=new LocalSurveyMap();
         private void paintWorldMap(Graphics2D g){
+            int x=contentLeft(),y=104;
+            sectionTitle(g,x,y,l("ARAZİ İZLEYİCİ","SURVEY MONITOR"),t("worldMap"),"");
+            localSurvey.paint(g,x,y+72,getWidth()-x-32,getHeight()-y-106);
+        }
+        private void paintLegacyWorldMap(Graphics2D g){
             int x=contentLeft(),y=104,w=getWidth(),h=getHeight();sectionTitle(g,x,y,l("ARAZİ İZLEYİCİ","SURVEY MONITOR"),t("worldMap"),"");
             int mapY=y+72,mapW=w-x-32,mapH=h-mapY-34;terminalPanel(g,x,mapY,mapW,mapH);
             Shape oldClip=g.getClip();g.clipRect(x+1,mapY+1,mapW-2,mapH-2);g.setStroke(new BasicStroke(1));
@@ -878,15 +884,17 @@ public final class ErdvynLauncher {
             setCursor(Cursor.getPredefinedCursor(clickable ? Cursor.HAND_CURSOR : Cursor.DEFAULT_CURSOR)); repaint();
         }
         @Override public void mousePressed(MouseEvent e) {
+            if(page==Page.MAP&&localSurvey.press(e.getPoint())){if(e.getClickCount()==2)localSurvey.reset();return;}
             pressedControl=controlAt(e.getPoint());
             if(volumeBounds.contains(e.getPoint())){volumeDragging=true;setVideoVolumeFromMouse(e.getX());return;}
             windowActionStart=e.getLocationOnScreen();windowStartBounds=frame.getBounds();resizeMask=edgeMask(e.getPoint());
             resizingWindow=resizeMask!=0;draggingWindow=!resizingWindow&&e.getY()<70&&e.getX()>SIDEBAR&&!languageBounds.contains(e.getPoint())&&!closeBounds.contains(e.getPoint())&&!minimizeBounds.contains(e.getPoint());
         }
-        @Override public void mouseReleased(MouseEvent e) {pressedControl="";volumeDragging=false;draggingWindow=false;resizingWindow=false;resizeMask=0;windowActionStart=null;windowStartBounds=null;}
+        @Override public void mouseReleased(MouseEvent e) {localSurvey.release();pressedControl="";volumeDragging=false;draggingWindow=false;resizingWindow=false;resizeMask=0;windowActionStart=null;windowStartBounds=null;}
         @Override public void mouseEntered(MouseEvent e) { }
         @Override public void mouseExited(MouseEvent e) { hoverNav = -1;hoverNews=-1; hoverPlay = false; hoverLanguage = false;hoverUpdate=false;hoverProfile=false; repaint(); }
         @Override public void mouseDragged(MouseEvent e) {
+            if(page==Page.MAP&&localSurvey.drag(e.getPoint())){repaint();return;}
             if(volumeDragging){setVideoVolumeFromMouse(e.getX());return;}
             if(windowActionStart==null||windowStartBounds==null)return;Point now=e.getLocationOnScreen();int dx=now.x-windowActionStart.x,dy=now.y-windowActionStart.y;
             if(draggingWindow){frame.setLocation(windowStartBounds.x+dx,windowStartBounds.y+dy);return;}
@@ -895,7 +903,7 @@ public final class ErdvynLauncher {
             minW=1040;minH=640;if(w<minW){if((resizeMask&1)!=0)x-=minW-w;w=minW;}if(h<minH){if((resizeMask&4)!=0)y-=minH-h;h=minH;}frame.setBounds(x,y,w,h);
         }
 
-        @Override public void mouseWheelMoved(MouseWheelEvent e){if(audioBounds.contains(e.getPoint())||volumeBounds.contains(e.getPoint())){video.setVolume(video.volume()-e.getPreciseWheelRotation()*.06);repaint();return;}if(page==Page.NEWS&&!newsComposeOpen){int visible=Math.max(1,(getHeight()-314)/46),max=Math.max(0,(newsPosts.size()-visible)*46);newsScroll=Math.max(0,Math.min(max,newsScroll+e.getWheelRotation()*46));repaint();}}
+        @Override public void mouseWheelMoved(MouseWheelEvent e){if(page==Page.MAP&&localSurvey.wheel(e.getPoint(),e.getPreciseWheelRotation())){repaint();return;}if(audioBounds.contains(e.getPoint())||volumeBounds.contains(e.getPoint())){video.setVolume(video.volume()-e.getPreciseWheelRotation()*.06);repaint();return;}if(page==Page.NEWS&&!newsComposeOpen){int visible=Math.max(1,(getHeight()-314)/46),max=Math.max(0,(newsPosts.size()-visible)*46);newsScroll=Math.max(0,Math.min(max,newsScroll+e.getWheelRotation()*46));repaint();}}
         private void setVideoVolumeFromMouse(int x){int start=volumeBounds.x+4,end=start+Math.max(18,volumeBounds.width-10);video.setVolume((x-start)/(double)Math.max(1,end-start));repaint();}
         private String controlAt(Point point){if(playBounds.contains(point))return"play";if(instancePathBounds.contains(point))return"instance";if(audioBounds.contains(point))return"audio";if(notificationBounds.contains(point))return"notification";if(profileBounds.contains(point))return"profile";if(installPackBounds.contains(point))return"install";if(verifyBounds.contains(point))return"verify";if(folderBounds.contains(point))return"folder";if(chatSendBounds.contains(point))return"send";for(int i=0;i<navBounds.length;i++)if(navBounds[i]!=null&&navBounds[i].contains(point))return"nav"+i;for(int i=0;i<settingBounds.length;i++)if(settingBounds[i].contains(point))return"setting"+i;return"";}
 
