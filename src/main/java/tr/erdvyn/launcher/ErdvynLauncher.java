@@ -838,6 +838,13 @@ public final class ErdvynLauncher {
             if(audioBounds.contains(e.getPoint())){video.toggleMute();playUiSound(105);return;}
             if (languageBounds.contains(e.getPoint())) { playUiSound(128);toggleLanguage(); return; }
             if(notificationBounds.contains(e.getPoint())){playUiSound(94);notificationsOpen=!notificationsOpen;profileOpen=false;repaint();return;}
+            // The notification bus is a modal overlay. Handle its update action before
+            // the navigation buttons that remain geometrically underneath the panel.
+            if(notificationsOpen){
+                if(updateBounds.contains(e.getPoint())){playUiSound(88);launchPreparedUpdate();return;}
+                if(!notificationPanelBounds.contains(e.getPoint()))notificationsOpen=false;
+                repaint();return;
+            }
             if(selectedNews>=0){if(articleCloseBounds.contains(e.getPoint()))selectedNews=-1;repaint();return;}
             if(newsComposeOpen){if(newsTitleInputBounds.contains(e.getPoint())){newsField=0;requestFocusInWindow();}else if(newsBodyInputBounds.contains(e.getPoint())){newsField=1;requestFocusInWindow();}else if(newsCancelBounds.contains(e.getPoint())){newsComposeOpen=false;newsTitleDraft="";newsBodyDraft="";}else if(newsPublishBounds.contains(e.getPoint()))publishNews();repaint();return;}
             if(profileBounds.contains(e.getPoint())){playUiSound(101);profileOpen=!profileOpen;notificationsOpen=false;repaint();return;}
@@ -873,7 +880,7 @@ public final class ErdvynLauncher {
             for (int i = 0; i < navBounds.length; i++) if (navBounds[i] != null && navBounds[i].contains(mouse)) hoverNav = i;
             hoverPlay = page == Page.HOME && playBounds.contains(mouse); hoverLanguage = languageBounds.contains(mouse);
             hoverAudio=audioBounds.contains(mouse);hoverVerify=page==Page.PACK&&verifyBounds.contains(mouse);hoverFolder=page==Page.PACK&&folderBounds.contains(mouse);hoverSetting=-1;
-            hoverUpdate=page==Page.HOME&&updateBounds.contains(mouse);hoverProfile=profileBounds.contains(mouse);hoverNews=-1;
+            hoverUpdate=notificationsOpen&&updateBounds.contains(mouse);hoverProfile=profileBounds.contains(mouse);hoverNews=-1;
             if(page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(newsBounds[i].contains(mouse))hoverNews=i;
             if(page==Page.SETTINGS)for(int i=0;i<settingBounds.length;i++)if(settingBounds[i].contains(mouse))hoverSetting=i;
             int edge=edgeMask(mouse);if(edge!=0){setCursor(Cursor.getPredefinedCursor(cursorFor(edge)));repaint();return;}

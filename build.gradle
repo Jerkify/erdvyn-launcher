@@ -5,7 +5,7 @@ plugins {
 }
 
 group = 'tr.erdvyn'
-version = providers.environmentVariable('RELEASE_VERSION').orElse('2.1.19').get()
+version = providers.environmentVariable('RELEASE_VERSION').orElse('2.1.20').get()
 
 repositories { mavenCentral() }
 
