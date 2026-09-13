@@ -45,25 +45,28 @@ final class PackServiceTest {
     }
 
     @Test
-    void allowsExplicitlyManagedConfigFiles() throws Exception {
+    void neverLetsManifestManagementOverrideExistingPlayerConfig() throws Exception {
         JsonNode manifest = JSON.readTree("{\"managed_paths\":[\"config/required.toml\"]}");
-        JsonNode entry = JSON.readTree("{\"path\":\"config/required.toml\"}");
-        assertFalse(PackService.shouldPreserveExisting(manifest, entry, "config/required.toml"));
+        JsonNode entry = JSON.readTree("{\"path\":\"config/required.toml\",\"managed\":true}");
+        assertTrue(PackService.shouldPreserveExisting(manifest, entry, "config/required.toml"));
+        assertTrue(PackService.shouldPreserveExisting(manifest, entry, "defaultconfigs/required.toml"));
     }
 
     @Test
     void removesOnlyExplicitPackArtifacts(@TempDir Path game) throws Exception {
-        Path target = game.resolve("config/spell_engine/server.json5");
+        Path target = game.resolve("mods/retired-mod.jar");
         Path kept = game.resolve("config/sodium-options.json");
         Files.createDirectories(target.getParent());
+        Files.createDirectories(kept.getParent());
         Files.writeString(target, "old");
         Files.writeString(kept, "player");
-        JsonNode manifest = JSON.readTree("{\"remove_paths\":[\"config/spell_engine\"]}");
+        JsonNode manifest = JSON.readTree("{\"remove_paths\":[\"mods/retired-mod.jar\",\"config/sodium-options.json\"]}");
         var progress = new ArrayList<PackService.Progress>();
         PackService.removeRequestedPaths(game, manifest, progress::add);
         assertFalse(Files.exists(target));
         assertTrue(Files.exists(kept));
-        assertTrue(progress.stream().anyMatch(item -> item.line().equals("[REMOVED] config/spell_engine")));
+        assertTrue(progress.stream().anyMatch(item -> item.line().equals("[REMOVED] mods/retired-mod.jar")));
+        assertTrue(progress.stream().anyMatch(item -> item.line().equals("[KEEP] config/sodium-options.json")));
     }
 
     @Test
@@ -76,10 +79,10 @@ final class PackServiceTest {
     void appliesNamedCleanupOnlyOnce(@TempDir Path root) throws Exception {
         Path game = root.resolve("game");
         Path state = root.resolve("state/cleanups.json");
-        Path target = game.resolve("config/old-mod.toml");
+        Path target = game.resolve("mods/old-mod.jar");
         Files.createDirectories(target.getParent());
         Files.writeString(target, "old");
-        JsonNode manifest = JSON.readTree("{\"cleanup_id\":\"remove-old-mod-v1\",\"remove_paths\":[\"config/old-mod.toml\"]}");
+        JsonNode manifest = JSON.readTree("{\"cleanup_id\":\"remove-old-mod-v1\",\"remove_paths\":[\"mods/old-mod.jar\"]}");
         PackService.removeRequestedPaths(game, manifest, state, ignored -> {});
         Files.writeString(target, "regenerated");
         PackService.removeRequestedPaths(game, manifest, state, ignored -> {});

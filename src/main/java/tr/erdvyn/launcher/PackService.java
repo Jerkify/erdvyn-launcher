@@ -249,10 +249,10 @@ final class PackService {
     static boolean shouldPreserveExisting(JsonNode manifest, JsonNode entry, String relative) {
         String path = normalizeManifestPath(relative);
         if (path.isBlank()) return false;
+        // Player-edited settings are authoritative once they exist. A malformed or
+        // outdated manifest must never opt them back into pack management.
+        if (isUserOwnedSettingsPath(path)) return true;
         if (entry.path("managed").asBoolean(false) || containsPath(manifest.path("managed_paths"), path)) return false;
-        if (PRESERVED_FILES.contains(path)) return true;
-        for (String root : PRESERVED_ROOTS) if (isUnderRoot(path, root)) return true;
-        if (isUnderRoot(path, "config")) return true;
         JsonNode preserveRoots = manifest.path("preserve_roots");
         if (preserveRoots.isArray()) for (JsonNode root : preserveRoots) {
             if (isUnderRoot(path, normalizeManifestPath(root.asText()))) return true;
@@ -273,6 +273,10 @@ final class PackService {
         if (!cleanupId.isBlank() && completed.contains(cleanupId)) return;
         for (JsonNode value : paths) {
             String relative = normalizeManifestPath(value.asText());
+            if (isUserOwnedSettingsPath(relative)) {
+                progress.accept(new Progress(.03, "[KEEP] " + relative));
+                continue;
+            }
             if (!isAllowedRemovalPath(relative)) throw new IOException("Unsafe pack removal path: " + value.asText());
             Path target = root.resolve(relative).normalize();
             if (!target.startsWith(root) || target.equals(root)) throw new IOException("Unsafe pack removal path: " + value.asText());
@@ -318,6 +322,13 @@ final class PackService {
     private static boolean containsPath(JsonNode paths, String expected) {
         if (!paths.isArray()) return false;
         for (JsonNode path : paths) if (expected.equals(normalizeManifestPath(path.asText()))) return true;
+        return false;
+    }
+
+    private static boolean isUserOwnedSettingsPath(String path) {
+        if (PRESERVED_FILES.contains(path)) return true;
+        if (isUnderRoot(path, "config") || isUnderRoot(path, "defaultconfigs")) return true;
+        for (String root : PRESERVED_ROOTS) if (isUnderRoot(path, root)) return true;
         return false;
     }
 
