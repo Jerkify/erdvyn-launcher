@@ -51,8 +51,8 @@ final class LauncherUpdateService {
         String expected="Erdvyn-Launcher-Setup-"+version+".exe";
         for(JsonNode asset:root.path("assets")){
             String name=asset.path("name").asText();
+            // Only the installer named for this tag: a stray older setup.exe in the release must never be offered as the update.
             if(name.equalsIgnoreCase(expected))installer=asset;
-            else if(installer==null&&name.toLowerCase(Locale.ROOT).startsWith("erdvyn-launcher-setup-")&&name.toLowerCase(Locale.ROOT).endsWith(".exe"))installer=asset;
             if(name.equalsIgnoreCase("SHA256SUMS.txt"))sums=asset;
         }
         if(installer==null)throw new IOException("GitHub release installer is missing");
@@ -65,6 +65,7 @@ final class LauncherUpdateService {
             if(!sumsUrl.isBlank())sha=readChecksum(URI.create(sumsUrl),installerName);
         }
         if(installerUrl.isBlank()||!validSha256(sha))throw new IOException("GitHub release checksum is missing");
+        if(!LauncherConfig.secure(URI.create(installerUrl)))throw new IOException("GitHub release installer URL is not https");
         return new Update(version,URI.create(installerUrl),sha.toLowerCase(Locale.ROOT),root.path("body").asText(""));
     }
 
@@ -92,7 +93,9 @@ final class LauncherUpdateService {
         String sha256 = root.path("sha256").asText().strip().toLowerCase();
         if (version.isBlank() || url.isBlank() || sha256.length() != 64) throw new IOException("Launcher update manifest is incomplete");
         if (compareVersions(version, CURRENT_VERSION) <= 0) return null;
-        return new Update(version, manifestUri.resolve(url), sha256, root.path("release_notes").asText(""));
+        URI installer = manifestUri.resolve(url);
+        if (!validSha256(sha256) || !LauncherConfig.secure(installer)) throw new IOException("Launcher update manifest is not trustworthy");
+        return new Update(version, installer, sha256, root.path("release_notes").asText(""));
     }
 
     Path download(Update update) throws Exception {

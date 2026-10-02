@@ -19,6 +19,7 @@ import java.util.Base64;
 
 final class MinecraftSkinService {
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final int MAX_SKIN_BYTES = 1 << 20;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(12))
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -57,9 +58,25 @@ final class MinecraftSkinService {
     }
 
     private BufferedImage downloadHead(Path cache,String skinUrl) throws Exception {
-        HttpResponse<byte[]> skinResponse = http.send(HttpRequest.newBuilder(URI.create(skinUrl)).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
-        if (skinResponse.statusCode() / 100 != 2) throw new IllegalStateException("Skin HTTP " + skinResponse.statusCode());
-        BufferedImage skin = ImageIO.read(new ByteArrayInputStream(skinResponse.body()));
+        // Mojang hands out http:// texture URLs: force https, allow only its texture host, cap the body and the pixel size,
+        // so a hostile network cannot feed a huge body or decompression bomb (OutOfMemoryError escapes catch(Exception)).
+        URI uri = URI.create(skinUrl);
+        if (!"textures.minecraft.net".equalsIgnoreCase(uri.getHost())) return null;
+        uri = new URI("https", uri.getHost(), uri.getPath(), null);
+        HttpResponse<java.io.InputStream> skinResponse = http.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofInputStream());
+        byte[] body;
+        try (java.io.InputStream in = skinResponse.body()) {
+            if (skinResponse.statusCode() / 100 != 2) throw new IllegalStateException("Skin HTTP " + skinResponse.statusCode());
+            body = in.readNBytes(MAX_SKIN_BYTES + 1);
+        }
+        if (body.length > MAX_SKIN_BYTES) return null;
+        try (var input = ImageIO.createImageInputStream(new ByteArrayInputStream(body))) {
+            var readers = ImageIO.getImageReaders(input);
+            if (!readers.hasNext()) return null;
+            var reader = readers.next();
+            try { reader.setInput(input); if (reader.getWidth(0) > 1024 || reader.getHeight(0) > 1024) return null; } finally { reader.dispose(); }
+        }
+        BufferedImage skin = ImageIO.read(new ByteArrayInputStream(body));
         if (skin == null || skin.getWidth() < 48 || skin.getHeight() < 16) return null;
         BufferedImage head = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = head.createGraphics();

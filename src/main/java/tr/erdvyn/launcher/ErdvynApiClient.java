@@ -28,6 +28,12 @@ final class ErdvynApiClient {
 
     boolean configured() { return baseUrl() != null; }
     Login current() { return login; }
+    void signOut() { login = null; }
+
+    /** True when the Erdvyn session belongs to this Minecraft profile (the API may send the UUID with or without dashes). */
+    static boolean sameAccount(Login active, MicrosoftAccountService.Session session) {
+        return active != null && session != null && active.account().uuid().replace("-", "").equalsIgnoreCase(session.uuidWithoutDashes());
+    }
 
     Login authenticate(MicrosoftAccountService.Session minecraft) throws Exception {
         String base = baseUrl();if(base==null)throw new IllegalStateException("ERDVYN_API_URL is not configured");

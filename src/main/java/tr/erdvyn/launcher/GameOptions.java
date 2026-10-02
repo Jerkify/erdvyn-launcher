@@ -20,8 +20,16 @@ final class GameOptions {
         load();
     }
 
-    int ramGb() { return Math.max(2, Math.min(16, PREFS.getInt("minecraftRamGb", 8))); }
-    void setRamGb(int value) { PREFS.putInt("minecraftRamGb", Math.max(2, Math.min(16, value))); }
+    // Leave ~2 GB for Windows and the launcher: an 8 GB laptop must not be offered an 8 GB heap.
+    static final int MAX_RAM_GB = clamp((int) (physicalMemoryBytes() >> 30) - 2, 2, 16);
+
+    int ramGb() { return clamp(PREFS.getInt("minecraftRamGb", Math.min(8, MAX_RAM_GB)), 2, MAX_RAM_GB); }
+    void setRamGb(int value) { PREFS.putInt("minecraftRamGb", clamp(value, 2, MAX_RAM_GB)); }
+
+    private static long physicalMemoryBytes() {
+        try { return ((com.sun.management.OperatingSystemMXBean) java.lang.management.ManagementFactory.getOperatingSystemMXBean()).getTotalMemorySize(); }
+        catch (Throwable unavailable) { return 18L << 30; }
+    }
     int renderDistance() { return integer("renderDistance", 16, 2, 64); }
     int simulationDistance() { return integer("simulationDistance", 10, 2, 32); }
     int maxFps() { return integer("maxFps", 120, 30, 260); }

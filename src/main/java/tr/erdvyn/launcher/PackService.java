@@ -90,7 +90,11 @@ final class PackService {
             }
             progress.accept(new Progress(base, "[GET] " + relative));
             try {
-                download(URI.create(manifestUrl).resolve(url).toString(), target, expected);
+                // Fail closed: pack files run inside the game, so an unhashed or plain-http entry is never installed.
+                if (!expected.matches("[0-9a-f]{64}")) throw new IOException("manifest entry has no SHA-256");
+                URI source = URI.create(manifestUrl).resolve(url);
+                if (!LauncherConfig.secure(source)) throw new IOException("insecure download URL");
+                download(source.toString(), target, expected);
                 downloaded++;
                 progress.accept(new Progress(base + .9 / Math.max(1, total), "[SAVED] " + relative));
             } catch (Exception error) {
@@ -99,13 +103,16 @@ final class PackService {
             }
         }
         JsonNode enforceRoots = root.path("enforce_roots");
+        // One folder per run so a later quarantine never overwrites an earlier copy of the same jar.
+        Path quarantineRoot = LauncherPaths.appRoot().resolve("quarantine").resolve("unmanaged-pack-files").resolve(String.valueOf(Instant.now().getEpochSecond())).toAbsolutePath().normalize();
         if (enforceRoots.isArray()) for (JsonNode rootName : enforceRoots) {
+            // Only the mods tree is enforced; a manifest naming "." must not sweep jars from the whole instance.
+            if (!isUnderRoot(normalizeManifestPath(rootName.asText()), "mods")) continue;
             Path enforced = game.resolve(rootName.asText()).normalize();
             if (!enforced.startsWith(game) || !Files.isDirectory(enforced)) continue;
             try (var stream = Files.walk(enforced)) {
                 for (Path actual : stream.filter(Files::isRegularFile).toList()) {
                     if (actual.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".jar") && !managedFiles.contains(actual.toAbsolutePath().normalize())) {
-                        Path quarantineRoot = LauncherPaths.appRoot().resolve("quarantine").resolve("unmanaged-pack-files").toAbsolutePath().normalize();
                         Path quarantine = quarantineRoot.resolve(game.relativize(actual).toString()).normalize();
                         if (!quarantine.startsWith(quarantineRoot)) throw new IOException("Unsafe quarantine path: " + actual);
                         Files.createDirectories(quarantine.getParent());
@@ -209,17 +216,17 @@ final class PackService {
     private void download(String url, Path target, String expectedSha256) throws Exception {
         Files.createDirectories(target.getParent());
         Path temp = target.resolveSibling(target.getFileName() + ".erdvyn-download");
+        // BodyHandlers.ofFile does not truncate: a stale longer temp file would leave trailing bytes.
+        Files.deleteIfExists(temp);
         HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(3)).GET().build();
-        HttpResponse<Path> response = http.send(request, HttpResponse.BodyHandlers.ofFile(temp));
-        if (response.statusCode() / 100 != 2) {
+        try {
+            HttpResponse<Path> response = http.send(request, HttpResponse.BodyHandlers.ofFile(temp));
+            if (response.statusCode() / 100 != 2) throw new IOException("HTTP " + response.statusCode());
+            if (!expectedSha256.equalsIgnoreCase(sha256(temp))) throw new IOException("SHA-256 mismatch");
+            Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } finally {
             Files.deleteIfExists(temp);
-            throw new IOException("HTTP " + response.statusCode());
         }
-        if (!expectedSha256.isBlank() && !expectedSha256.equalsIgnoreCase(sha256(temp))) {
-            Files.deleteIfExists(temp);
-            throw new IOException("SHA-256 mismatch");
-        }
-        Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
     private static HttpRequest freshManifestRequest(String manifestUrl, Duration timeout) {

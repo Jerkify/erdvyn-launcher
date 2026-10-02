@@ -160,7 +160,7 @@ final class MinecraftInstallService {
         while(fields.hasNext()){
             JsonNode object=fields.next().getValue();
             String hash=object.path("hash").asText();
-            if(hash.length()<2)throw new IOException("Minecraft asset hash is invalid");
+            if(!hash.matches("[0-9a-f]{40}"))throw new IOException("Minecraft asset hash is invalid");
             Path target=install.resolve("assets").resolve("objects").resolve(hash.substring(0,2)).resolve(hash);
             downloads.add(new Download(URI.create("https://resources.download.minecraft.net/"+hash.substring(0,2)+"/"+hash),hash,object.path("size").asLong(-1),target));
         }
@@ -179,7 +179,8 @@ final class MinecraftInstallService {
         String path=metadata.path("path").asText(),url=metadata.path("url").asText(),sha1=metadata.path("sha1").asText();
         if(path.isBlank())return;
         if(url.isBlank()||sha1.isBlank())throw new IOException("Minecraft library metadata is incomplete: "+path);
-        downloads.add(new Download(URI.create(url),sha1,metadata.path("size").asLong(-1),root.resolve(path)));
+        Path target=root.resolve(path).normalize();if(!target.startsWith(root.normalize()))throw new IOException("Unsafe library path: "+path);
+        downloads.add(new Download(URI.create(url),sha1,metadata.path("size").asLong(-1),target));
     }
 
     private void downloadBatch(List<Download> downloads, String label, Consumer<String> log, boolean verifyExistingHash) throws Exception {

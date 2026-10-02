@@ -96,7 +96,6 @@ public final class ErdvynLauncher {
 
     enum Language { TR, EN }
     enum Page { HOME, NEWS, PACK, GAME, MAP, SETTINGS, ADMIN }
-    enum UpdateStage { IDLE, CHECKING, DOWNLOADING, VERIFYING, READY, LAUNCHING }
 
     @SuppressWarnings("serial")
     static final class LauncherFrame extends JFrame {
@@ -108,12 +107,14 @@ public final class ErdvynLauncher {
 
         LauncherFrame() {
             super("Erdvyn Launcher");
-            try { setIconImage(ImageIO.read(Objects.requireNonNull(ErdvynLauncher.class.getResource("/assets/erdvyn-app-icon.png")))); } catch (Exception ignored) {}
+            try { setIconImages(iconSizes()); } catch (Exception ignored) {}
             setUndecorated(true);
             setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-            setMinimumSize(new Dimension(1040, 640));
-            setSize(1242, 768);
-            setLocationRelativeTo(null);
+            // A 1366x768 laptop at 125% only has ~1093x570 usable: never open past it, or the close button lands off-screen.
+            Rectangle usable=GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();setMaximizedBounds(usable);
+            setMinimumSize(new Dimension(Math.min(1040,usable.width),Math.min(640,usable.height)));
+            Rectangle saved=savedBounds();
+            if(saved!=null)setBounds(saved);else{setSize(Math.min(1242,usable.width),Math.min(768,usable.height));setLocationRelativeTo(null);}
             video = new VideoBackdrop();
             canvas = new LauncherCanvas(this,video);
             layers.setLayout(null);layers.add(video.panel,JLayeredPane.DEFAULT_LAYER);layers.add(canvas,JLayeredPane.PALETTE_LAYER);setContentPane(layers);
@@ -140,6 +141,7 @@ public final class ErdvynLauncher {
 
         void shutdownAndExit() {
             if (!shuttingDown.compareAndSet(false, true)) return;
+            if((getExtendedState()&MAXIMIZED_BOTH)==0){Preferences p=prefs(LauncherFrame.class);Rectangle b=getBounds();p.putInt("windowX",b.x);p.putInt("windowY",b.y);p.putInt("windowW",b.width);p.putInt("windowH",b.height);}
             canvas.shutdown();
             video.shutdown();
             setVisible(false);
@@ -151,6 +153,23 @@ public final class ErdvynLauncher {
         }
 
         void onGameProcessStarted() { shutdownAndExit(); }
+        void toggleMaximized(){setExtendedState((getExtendedState()&MAXIMIZED_BOTH)!=0?NORMAL:MAXIMIZED_BOTH);}
+
+        /** Last window bounds, only while its header is still on a connected screen (monitor unplugged = default placement). */
+        private Rectangle savedBounds(){
+            Preferences p=prefs(LauncherFrame.class);Dimension min=getMinimumSize();int w=p.getInt("windowW",0),h=p.getInt("windowH",0);if(w<=0||h<=0)return null;
+            Rectangle r=new Rectangle(p.getInt("windowX",0),p.getInt("windowY",0),Math.max(min.width,w),Math.max(min.height,h));
+            for(GraphicsDevice device:GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices())if(device.getDefaultConfiguration().getBounds().contains(r.x+120,r.y+30))return r;
+            return null;
+        }
+
+        /** Every PNG entry of the app .ico, so Windows picks a hand-sized title bar/taskbar icon instead of shrinking one bitmap. */
+        static List<Image> iconSizes() throws Exception {
+            byte[] ico;try(InputStream in=Objects.requireNonNull(ErdvynLauncher.class.getResourceAsStream("/assets/erdvyn-app-icon.ico"))){ico=in.readAllBytes();}
+            java.nio.ByteBuffer data=java.nio.ByteBuffer.wrap(ico).order(java.nio.ByteOrder.LITTLE_ENDIAN);List<Image> images=new ArrayList<>();
+            for(int i=0,count=data.getShort(4);i<count;i++){int size=data.getInt(6+16*i+8),offset=data.getInt(6+16*i+12);images.add(ImageIO.read(new java.io.ByteArrayInputStream(ico,offset,size)));}
+            return images;
+        }
 
         private int videoJitterX,videoJitterY;
         private void layoutLayers(){int w=Math.max(1,getContentPane().getWidth()>0?getContentPane().getWidth():getWidth()),h=Math.max(1,getContentPane().getHeight()>0?getContentPane().getHeight():getHeight());Rectangle feed=LauncherCanvas.cameraBounds(w,h);video.panel.setBounds(feed.x+videoJitterX,feed.y+videoJitterY,feed.width,feed.height);canvas.setBounds(0,0,w,h);video.resize(feed.width,feed.height);layers.revalidate();layers.repaint();}
@@ -159,16 +178,9 @@ public final class ErdvynLauncher {
 
     static final class VideoBackdrop {
         private static final Path PREPARED=Path.of(System.getProperty("user.home"),"Videos","ErdvynLauncher");
-        private static final List<Path> MEDIA=List.of(
-                Path.of("C:/Medal/Edits/MedalTVMinecraft20260829134219880-trim-1788000173231.mp4"),
-                Path.of("C:/Medal/Clips/Minecraft/MedalTVMinecraft20260829135358462.mp4"),
-                Path.of("C:/Medal/Edits/MedalTVMinecraft20260829140347672-trim-1788001487967.mp4"),
-                Path.of("C:/Medal/Clips/Minecraft/MedalTVMinecraft20260829142023524.mp4"),
-                Path.of("C:/Medal/Edits/MedalTVMinecraft20260829143146521-trim-1788003213422.mp4"),
-                Path.of("C:/Medal/Clips/Minecraft/MedalTVMinecraft20260829144620964.mp4"),
-                Path.of("C:/Medal/Clips/Minecraft/MedalTVMinecraft20260829145602063.mp4"));
+        private static final int MAX_VIDEOS=16;
         final JFXPanel panel=new JFXPanel();private final Preferences prefs=prefs(VideoBackdrop.class);
-        private MediaPlayer player;private MediaView view;private AnimationTimer volumeTimer;private volatile boolean ready;private volatile double volume;private volatile boolean muted,uiGate;private int targetW=1440,targetH=900;private Path selected;
+        private MediaPlayer player;private MediaView view;private AnimationTimer volumeTimer;private volatile boolean ready;private volatile double volume;private volatile boolean muted,uiGate,paused;private int targetW=1440,targetH=900;private Path selected;
         private final Set<Path> attempted=new HashSet<>();
 
         VideoBackdrop(){panel.setOpaque(true);panel.setBackground(new Color(2,7,13));volume=Math.max(0,Math.min(1,prefs.getDouble("videoVolume",.16)));muted=prefs.getBoolean("videoMuted",false);selected=chooseVideo();Platform.runLater(this::open);}
@@ -180,9 +192,11 @@ public final class ErdvynLauncher {
             Path runtimeParent=Path.of(System.getProperty("java.home")).toAbsolutePath().getParent();if(runtimeParent!=null)roots.add(runtimeParent.resolve("videos"));
             roots.add(Path.of(System.getProperty("user.dir")).toAbsolutePath().resolve("videos"));roots.add(PREPARED);
             for(Path root:roots){List<Path> found=numberedVideos(root);if(!found.isEmpty())return found;}
-            return MEDIA.stream().filter(Files::isRegularFile).toList();
+            return List.of();
         }
-        private static List<Path> numberedVideos(Path root){List<Path> found=new ArrayList<>();for(int i=1;i<=MEDIA.size();i++){Path file=root.resolve(String.format(Locale.ROOT,"erdvyn-%02d.mp4",i));if(Files.isRegularFile(file))found.add(file);}return found;}
+        /** Stops decoding (and its audio) while the feed is hidden, minimized or Minecraft is loading. */
+        void setPaused(boolean value){if(paused==value)return;paused=value;Platform.runLater(()->{if(player!=null&&ready){if(value)player.pause();else player.play();}});}
+        private static List<Path> numberedVideos(Path root){List<Path> found=new ArrayList<>();for(int i=1;i<=MAX_VIDEOS;i++){Path file=root.resolve(String.format(Locale.ROOT,"erdvyn-%02d.mp4",i));if(Files.isRegularFile(file))found.add(file);}return found;}
         void resize(int w,int h){targetW=Math.max(1,w);targetH=Math.max(1,h);Platform.runLater(this::applyViewport);}
         void toggleMute(){muted=!muted;prefs.putBoolean("videoMuted",muted);applyVolume();}
         void setVolume(double value){volume=Math.max(0,Math.min(1,value));if(volume>.001)muted=false;prefs.putDouble("videoVolume",volume);prefs.putBoolean("videoMuted",muted);applyVolume();}
@@ -196,7 +210,7 @@ public final class ErdvynLauncher {
                 Media media=new Media(selected.toUri().toString());player=new MediaPlayer(media);view=new MediaView(player);view.setSmooth(true);view.setPreserveRatio(false);
                 ColorAdjust cameraGrade=new ColorAdjust();cameraGrade.setSaturation(-.19);cameraGrade.setContrast(.06);cameraGrade.setBrightness(.045);cameraGrade.setHue(-.035);cameraGrade.setInput(new SepiaTone(.22));view.setEffect(cameraGrade);
                 StackPane root=new StackPane(view);root.setStyle("-fx-background-color: #02070d;");panel.setScene(new Scene(root,javafx.scene.paint.Color.rgb(2,7,13)));
-                player.setCycleCount(MediaPlayer.INDEFINITE);player.setOnReady(()->{ready=true;applyViewport();applyVolume();player.play();});player.setOnRepeat(()->{if(player!=null){player.seek(Duration.ZERO);player.play();}});player.setOnStalled(()->{if(player!=null)player.play();});
+                player.setCycleCount(MediaPlayer.INDEFINITE);player.setOnReady(()->{ready=true;applyViewport();applyVolume();if(!paused)player.play();});player.setOnRepeat(()->{if(player!=null){player.seek(Duration.ZERO);if(!paused)player.play();}});player.setOnStalled(()->{if(player!=null&&!paused)player.play();});
                 player.setOnError(()->{ready=false;System.err.println("Video playback: "+player.getError());tryNextVideo();});
                 volumeTimer=new AnimationTimer(){@Override public void handle(long now){if(player==null||!ready)return;Duration duration=player.getTotalDuration(),at=player.getCurrentTime();if(duration==null||duration.isUnknown()||duration.isIndefinite())return;double edge=.38,seconds=at.toSeconds(),remaining=duration.toSeconds()-seconds,fade=Math.min(1,Math.min(seconds/edge,remaining/edge));player.setVolume((muted||!uiGate?0:volume)*Math.max(0,fade));}};volumeTimer.start();
             }catch(Exception ex){ready=false;System.err.println("Video init: "+ex.getMessage());tryNextVideo();}
@@ -229,12 +243,13 @@ public final class ErdvynLauncher {
         private static final Color MUTED = new Color(222, 143, 74);
         private static final Color AMBER = new Color(244, 139, 43);
         private static final Color AMBER_HOT = new Color(255, 174, 66);
-        private static final Color RED = new Color(194, 68, 32);
+        private static final Color RED = new Color(235, 90, 58); // ~5.8:1 on the panels; 194,68,32 failed 4.5:1 for small text
         private static final int SIDEBAR = 82;
         private static final int[] BOOT_STEPS={0,4,11,18,34,52,71,83,99,107,111,112};
         private static final String[] BOOT_LOGS={
-                "> INITIALIZING ERDVYN RUNTIME","> JAVA 21 RUNTIME ............... OK","> MINECRAFT 1.21.1 .............. FOUND","> NEOFORGE 21.1.243 ............. READY",
-                "> VERIFYING PACKAGE INDEX","[OK] mod manifest","[OK] configs","[OK] resources","> MOUNTING RESOURCE PACKS","> PREPARING JVM ARGUMENTS",
+                // Nothing is checked yet here: the real results appear in the launch trace, so these lines only queue work.
+                "> INITIALIZING ERDVYN RUNTIME","> JAVA 21 RUNTIME ............... QUEUED","> MINECRAFT 1.21.1 .............. QUEUED","> NEOFORGE 21.1.243 ............. QUEUED",
+                "> VERIFYING PACKAGE INDEX","> mod manifest","> configs","> resources","> MOUNTING RESOURCE PACKS","> PREPARING JVM ARGUMENTS",
                 "> SYNCHRONIZING LOCAL PROFILE","> REGISTERING LAUNCH SERVICES","> PREPARING GAME INSTANCE","[WAIT] game process","> SPAWNING GAME PROCESS","> HANDOFF TO MINECRAFT"};
         private static final String[] LAUNCHER_BOOT_LOGS={
                 "> POWERING ERDVYN CONTROL TERMINAL","> MEMORY MAP .................... OK","> CRT PHOSPHOR LAYER ............ READY","> LOADING PIXEL GLYPH ROM",
@@ -246,7 +261,6 @@ public final class ErdvynLauncher {
         private final Preferences preferences = prefs(ErdvynLauncher.class);
         private final javax.swing.Timer timer = new javax.swing.Timer(16, this);
         private final Random random = new Random(72491);
-        private final List<Dust> dust = new ArrayList<>();
         private final Map<String, String[]> strings = new HashMap<>();
         private final Rectangle[] navBounds = new Rectangle[7];
         private Rectangle playBounds = new Rectangle(), instancePathBounds = new Rectangle(), languageBounds = new Rectangle(), closeBounds = new Rectangle(), minimizeBounds = new Rectangle();
@@ -261,7 +275,7 @@ public final class ErdvynLauncher {
         private final Rectangle[] settingsFolderBounds={new Rectangle(),new Rectangle(),new Rectangle(),new Rectangle()};
         private final Rectangle optionsFileBounds=new Rectangle(),configFolderBounds=new Rectangle();
         private final Rectangle adminTargetBounds=new Rectangle(),adminCommandBounds=new Rectangle(),adminGrantBounds=new Rectangle(),adminRevokeBounds=new Rectangle(),adminBanBounds=new Rectangle(),adminUnbanBounds=new Rectangle(),adminExecuteBounds=new Rectangle();
-        private final Rectangle launchDismissBounds=new Rectangle();
+        private final Rectangle launchDismissBounds=new Rectangle(),launchLogsBounds=new Rectangle();
         private final Rectangle[] newsBounds = new Rectangle[12];
         private final HubClient hub = new HubClient(this::onHubEvent);
         private final MinecraftServerStatus serverStatus = new MinecraftServerStatus(this::onServerStatus);
@@ -280,14 +294,15 @@ public final class ErdvynLauncher {
         private final List<ErdvynApiClient.AdminAccount> adminAccounts = new ArrayList<>();
         private final Map<String,BufferedImage> adminHeads = new HashMap<>();
         private GameOptions gameOptions;
-        private MicrosoftAccountService.Session accountSession;
+        private volatile MicrosoftAccountService.Session accountSession; // written by login/launch worker threads
         private MinecraftServerStatus.Snapshot serverSnapshot = MinecraftServerStatus.Snapshot.offline();
         private ErdvynApiClient.Status apiStatus = ErdvynApiClient.Status.offline();
         private Page page = Page.HOME;
         private Language language;
-        private UpdateStage updateStage = UpdateStage.IDLE;
-        private int hoverNav = -1, hoverNews = -1, hoverSetting = -1, selectedNews = -1, stateTicks, resizeMask, newsScroll,newsFirstVisible;
-        private boolean hoverPlay, hoverLanguage, hoverUpdate, hoverProfile, profileOpen, autoUpdate = true, autoConnect = true, closeAfterLaunch = true;
+        private int hoverNav = -1, hoverNews = -1, hoverSetting = -1, selectedNews = -1, resizeMask, newsScroll,newsFirstVisible,seenNotifications;
+        private boolean hoverPlay, hoverLanguage, hoverUpdate, hoverProfile, profileOpen, autoUpdate = true, autoConnect = true;
+        // Destructive admin buttons need a second click within a few seconds.
+        private String pendingConfirm="";private double pendingConfirmUntil;
         private boolean hoverAudio, volumeDragging, hoverVerify, hoverFolder, packVerifying, chatFocused,bootActive,bootCompleteSound,launcherBootMode,launcherReady=true,cameraVideoSwitched;
         private boolean accountLoginInProgress,launchAfterLogin,pendingGameLaunch,gameLaunching,launchOverlayActive,launchFailed,backendPollInProgress,newsComposeOpen,newsPublishInProgress,notificationsOpen,packInstalled;
         private volatile boolean launcherUpdateCheckInProgress;
@@ -298,10 +313,9 @@ public final class ErdvynLauncher {
         private BufferedImage playerHead;
         private LauncherUpdateService.Update launcherUpdate;
         private Path launcherInstaller;
-        private double time, displayedProgress, targetProgress, playPulse, pageTransition = 1, opening, sidebarExpand, volumeReveal,pressDepth,cameraGlitchStart=-10,cameraGlitchEnd=-10,nextCameraGlitchAt=14,launchDisplayedProgress,launchTargetProgress;
+        private double time, playPulse, pageTransition = 1, opening, sidebarExpand, volumeReveal,pressDepth,cameraGlitchStart=-10,cameraGlitchEnd=-10,nextCameraGlitchAt=14,launchDisplayedProgress,launchTargetProgress;
         private int bootStepIndex,bootLogCount,bootDelay,bootHold;
         private String pressedControl="";
-        private final double[] toggleVisual = {1,1,0};
         private double packProgress;
         private String packStatus = "";
         private String launchStatus = "";
@@ -327,7 +341,7 @@ public final class ErdvynLauncher {
             this.frame = frame;
             this.video=video;setOpaque(false);
             setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
-            setFocusable(true);
+            setFocusable(true);setFocusTraversalKeysEnabled(false); // Tab must reach keyPressed to switch admin/news fields
             language = "EN".equalsIgnoreCase(preferences.get("language", "TR")) ? Language.EN : Language.TR;
             autoUpdate=preferences.getBoolean("autoUpdate",true);autoConnect=preferences.getBoolean("autoConnect",true);
             try { LauncherPaths.prepareInstance(); } catch (Exception ignored) {}
@@ -340,7 +354,6 @@ public final class ErdvynLauncher {
             installStrings();
             for(int i=0;i<navBounds.length;i++)navBounds[i]=new Rectangle();
             for(int i=0;i<newsBounds.length;i++)newsBounds[i]=new Rectangle();
-            for (int i = 0; i < 58; i++) dust.add(new Dust(random.nextDouble(), random.nextDouble(), .08 + random.nextDouble() * .32, 2 + random.nextInt(3), random.nextDouble() * Math.PI * 2));
             addMouseListener(this);
             addMouseMotionListener(this);
             addMouseWheelListener(this);
@@ -350,7 +363,7 @@ public final class ErdvynLauncher {
             if(!uiTest())hub.connect();
             if(!uiTest())serverStatus.start();
             if(!uiTest()&&accountSession!=null)authenticateCachedAccount();
-            if(!uiTest())checkLauncherUpdateAsync();
+            if(!uiTest()&&autoUpdate)checkLauncherUpdateAsync();
             timer.start();
         }
 
@@ -420,6 +433,7 @@ public final class ErdvynLauncher {
                 case ADMIN -> paintAdmin(g);
             }
             g.setTransform(beforeContent); g.setComposite(beforeComposite);
+            paintSidebar(g);
             if (selectedNews >= 0) paintArticleOverlay(g);
             if (newsComposeOpen) paintNewsComposer(g);
             if (notificationsOpen) paintNotifications(g);
@@ -506,7 +520,26 @@ public final class ErdvynLauncher {
         private void paintChrome(Graphics2D g) {
             int w = getWidth(), h = getHeight();
             if(!notificationsOpen)updateBounds.setBounds(0,0,0,0);
-            int expanded=(int)(SIDEBAR+126*sidebarExpand);g.setColor(new Color(7,3,1,248));g.fillRect(0,0,expanded,h);g.setColor(LINE);g.drawLine(expanded-1,0,expanded-1,h);g.drawLine(0,69,w,69);paintLogo(g,21,18);
+            g.setColor(LINE);g.drawLine(0,69,w,69);
+            int headerX=SIDEBAR+18;g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);String linkLabel=l("BAĞLANTI:","LINK:");g.drawString(linkLabel,headerX,29);g.setColor(serverSnapshot.online()?PAPER:AMBER);g.drawString(serverSnapshot.online()?l("ÇEVRİMİÇİ","ONLINE"):l("ÇEVRİMDIŞI","OFFLINE"),headerX+g.getFontMetrics().stringWidth(linkLabel)+10,29);g.setColor(MUTED);g.drawString(l("DÜĞÜM: ","NODE: ")+"ERDVYN-FRONTIER",headerX,49);
+
+            String profileName=accountSession==null?l("GİRİŞ YOK","SIGNED OUT"):accountSession.name();String authState=accountSession==null?l("GEREKLİ","REQUIRED"):l("BAĞLI","LINKED");
+            int profileW=242,profileX=w-454;profileBounds.setBounds(profileX,12,profileW,44);g.setColor(hoverProfile?AMBER:LINE);g.drawRect(profileX,12,profileW,44);if(playerHead!=null){g.drawImage(playerHead,profileX+6,17,34,34,null);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}else{g.setColor(new Color(255,145,42,36));g.fillRect(profileX+6,17,34,34);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("KULL:","USER:"),profileX+49,30);g.setColor(PAPER);g.drawString(profileName,profileX+100,30);g.setColor(MUTED);g.drawString(l("YETKİ:","AUTH:"),profileX+49,47);g.setColor(accountSession==null?AMBER:PAPER);g.drawString(authState,profileX+100,47);
+
+            notificationBounds.setBounds(profileX-50,12,38,44);g.setColor(notificationBounds.contains(mouse)?AMBER:LINE);g.drawRect(notificationBounds.x,notificationBounds.y,notificationBounds.width,notificationBounds.height);paintBellIcon(g,notificationBounds.x+19,notificationBounds.y+21,notificationsOpen?PAPER:AMBER);if(notifications.size()>seenNotifications){g.setColor(PAPER);g.fillRect(notificationBounds.x+27,notificationBounds.y+7,5,5);}
+
+            languageBounds=new Rectangle(w-196,12,78,44);g.setColor(hoverLanguage?AMBER:LINE);g.drawRect(languageBounds.x,languageBounds.y,languageBounds.width,languageBounds.height);g.setFont(font(11,Font.PLAIN));g.setColor(language==Language.TR?PAPER:MUTED);g.drawString("TR",languageBounds.x+14,39);g.setColor(MUTED);g.drawString("/",languageBounds.x+35,39);g.setColor(language==Language.EN?PAPER:MUTED);g.drawString("EN",languageBounds.x+48,39);
+
+            minimizeBounds = new Rectangle(w - 108, 15, 38, 40); closeBounds = new Rectangle(w - 56, 15, 38, 40);
+            g.setStroke(new BasicStroke(1));if(minimizeBounds.contains(mouse)){g.setColor(new Color(255,145,42,30));g.fillRect(minimizeBounds.x,minimizeBounds.y,minimizeBounds.width,minimizeBounds.height);}if(closeBounds.contains(mouse)){g.setColor(new Color(235,90,58,70));g.fillRect(closeBounds.x,closeBounds.y,closeBounds.width,closeBounds.height);}
+            g.setColor(minimizeBounds.contains(mouse)?PAPER:MUTED); g.drawLine(w - 99, 36, w - 87, 36);
+            g.setColor(closeBounds.contains(mouse)?PAPER:MUTED); g.drawLine(w - 44, 29, w - 33, 40); g.drawLine(w - 33, 29, w - 44, 40);
+        }
+
+        /** Painted after the page so the widened sidebar overlays content instead of sliding it away from the cursor. */
+        private void paintSidebar(Graphics2D g){
+            int h=getHeight();
+            int expanded=(int)(SIDEBAR+126*sidebarExpand);g.setColor(new Color(7,3,1,248));g.fillRect(0,0,expanded,h);g.setColor(LINE);g.drawLine(expanded-1,0,expanded-1,h);g.drawLine(0,69,expanded,69);paintLogo(g,21,18);
 
             String[] labels = {t("home"), t("news"), t("pack"), t("gamePanel"), t("worldMap"), t("settings"), t("admin")};
             for (int i = 0; i < labels.length; i++) {
@@ -519,22 +552,9 @@ public final class ErdvynLauncher {
                 paintNavIcon(g,i,39,y+2+pressY,active?AMBER_HOT:hover?PAPER:MUTED);
                 if(sidebarExpand>.08){Composite old=g.getComposite();g.setComposite(AlphaComposite.SrcOver.derive((float)sidebarExpand));g.setFont(font(12,Font.PLAIN));g.setColor(active?AMBER_HOT:hover?PAPER:MUTED);g.drawString(upper(labels[i]),70,y+7+pressY);g.setComposite(old);}
             }
-            int headerX=expanded+18;g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);String linkLabel=l("BAĞLANTI:","LINK:");g.drawString(linkLabel,headerX,29);g.setColor(serverSnapshot.online()?PAPER:AMBER);g.drawString(serverSnapshot.online()?l("ÇEVRİMİÇİ","ONLINE"):l("BEKLEMEDE","STANDBY"),headerX+g.getFontMetrics().stringWidth(linkLabel)+10,29);g.setColor(MUTED);g.drawString(l("DÜĞÜM: ","NODE: ")+"ERDVYN-FRONTIER",headerX,49);
-
             audioBounds=new Rectangle((SIDEBAR-38)/2,h-62,38,42);
             int sliderLength=(int)(120*volumeReveal);if(sliderLength>5){volumeBounds=new Rectangle(61,h-55,sliderLength+8,28);g.setColor(LINE);g.drawRect(volumeBounds.x,volumeBounds.y,sliderLength+6,22);int fill=(int)((sliderLength-4)*video.volume());g.setColor(AMBER);for(int sx=0;sx<fill;sx+=7)g.fillRect(volumeBounds.x+4+sx,volumeBounds.y+5,4,12);}else volumeBounds.setBounds(0,0,0,0);paintSpeakerIcon(g,audioBounds.x+19,audioBounds.y+21,video.isMuted(),hoverAudio?AMBER_HOT:PAPER,hoverAudio);
             g.setFont(font(9,Font.PLAIN));g.setColor(MUTED);String launcherVersion=(sidebarExpand>.45?"LAUNCHER ":"v")+LauncherUpdateService.CURRENT_VERSION;g.drawString(launcherVersion,sidebarExpand>.45?14:Math.max(8,(SIDEBAR-g.getFontMetrics().stringWidth(launcherVersion))/2),h-72);
-
-            String profileName=accountSession==null?l("GİRİŞ YOK","SIGNED OUT"):accountSession.name();String authState=accountSession==null?l("GEREKLİ","REQUIRED"):l("BAĞLI","LINKED");
-            int profileW=242,profileX=w-454;profileBounds.setBounds(profileX,12,profileW,44);g.setColor(LINE);g.drawRect(profileX,12,profileW,44);if(playerHead!=null){g.drawImage(playerHead,profileX+6,17,34,34,null);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}else{g.setColor(new Color(255,145,42,36));g.fillRect(profileX+6,17,34,34);g.setColor(AMBER);g.drawRect(profileX+5,16,35,35);}g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("KULL:","USER:"),profileX+49,30);g.setColor(PAPER);g.drawString(profileName,profileX+100,30);g.setColor(MUTED);g.drawString(l("YETKİ:","AUTH:"),profileX+49,47);g.setColor(accountSession==null?AMBER:PAPER);g.drawString(authState,profileX+100,47);
-
-            notificationBounds.setBounds(profileX-50,12,38,44);g.setColor(LINE);g.drawRect(notificationBounds.x,notificationBounds.y,notificationBounds.width,notificationBounds.height);paintBellIcon(g,notificationBounds.x+19,notificationBounds.y+21,notificationsOpen?PAPER:AMBER);if(!notifications.isEmpty()){g.setColor(PAPER);g.fillRect(notificationBounds.x+27,notificationBounds.y+7,5,5);}
-
-            languageBounds=new Rectangle(w-196,12,78,44);g.setColor(LINE);g.drawRect(languageBounds.x,languageBounds.y,languageBounds.width,languageBounds.height);g.setFont(font(11,Font.PLAIN));g.setColor(language==Language.TR?PAPER:MUTED);g.drawString("TR",languageBounds.x+14,39);g.setColor(MUTED);g.drawString("/",languageBounds.x+35,39);g.setColor(language==Language.EN?PAPER:MUTED);g.drawString("EN",languageBounds.x+48,39);
-
-            minimizeBounds = new Rectangle(w - 108, 15, 38, 40); closeBounds = new Rectangle(w - 56, 15, 38, 40);
-            g.setColor(MUTED); g.setStroke(new BasicStroke(1)); g.drawLine(w - 99, 36, w - 87, 36);
-            g.drawLine(w - 44, 29, w - 33, 40); g.drawLine(w - 33, 29, w - 44, 40);
         }
 
         private void paintHome(Graphics2D g) {
@@ -548,7 +568,7 @@ public final class ErdvynLauncher {
         private void paintNews(Graphics2D g) {
             int x=contentLeft(),y=104,w=getWidth();sectionTitle(g,x,y,l("DUYURU TERMİNALİ","DISPATCH"),t("newsTitle"),"");
             for(Rectangle bounds:newsBounds)bounds.setBounds(0,0,0,0);newsComposeBounds.setBounds(0,0,0,0);
-            boolean admin=apiClient.current()!=null&&apiClient.current().account().admin();if(admin){newsComposeBounds.setBounds(w-238,y+4,206,38);terminalButton(g,newsComposeBounds,false,"[ "+l("YENİ DUYURU","NEW DISPATCH")+" ]");}
+            boolean admin=apiClient.current()!=null&&apiClient.current().account().admin();if(admin){newsComposeBounds.setBounds(w-238,y+4,206,38);terminalButton(g,newsComposeBounds,"[ "+l("YENİ DUYURU","NEW DISPATCH")+" ]");}
             int panelY=y+72,panelW=w-x-32,panelH=getHeight()-panelY-34;terminalPanel(g,x,panelY,panelW,panelH);g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("TARİH","DATE"),x+18,panelY+31);g.drawString("ID",x+154,panelY+31);g.drawString(l("KONU","SUBJECT"),x+252,panelY+31);g.drawString(l("DURUM","STATUS"),x+panelW-118,panelY+31);g.setColor(LINE);g.drawLine(x+12,panelY+44,x+panelW-12,panelY+44);
             if(newsPosts.isEmpty()){g.setFont(font(14,Font.PLAIN));g.setColor(MUTED);centered(g,apiClient.configured()?l("-- DUYURU KAYDI YOK --","-- NO DISPATCH RECORDS --"):l("-- ERDVYN API YAPILANDIRILMADI --","-- ERDVYN API NOT CONFIGURED --"),x+panelW/2,panelY+94);}
             else {int rowH=46,first=Math.max(0,Math.min(newsPosts.size()-1,newsScroll/rowH));newsFirstVisible=first;int visible=Math.min(newsBounds.length,Math.max(0,(panelH-58)/rowH));for(int slot=0;slot<visible&&first+slot<newsPosts.size();slot++){int index=first+slot,rowY=panelY+50+slot*rowH;ErdvynApiClient.NewsPost post=newsPosts.get(index);newsBounds[slot].setBounds(x+10,rowY,panelW-20,rowH);if(hoverNews==slot){g.setColor(new Color(255,139,43,25));g.fillRect(x+11,rowY+1,panelW-22,rowH-1);}g.setColor(new Color(145,65,18,70));g.drawLine(x+12,rowY+rowH,x+panelW-12,rowY+rowH);g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);g.drawString(formatNewsDate(post.publishedAt()),x+18,rowY+28);g.drawString(String.format(Locale.ROOT,"%04d",post.id()),x+154,rowY+28);g.setColor(PAPER);String title=post.title().length()>58?post.title().substring(0,55)+"...":post.title();g.drawString(title,x+252,rowY+28);g.setColor(AMBER);g.drawString(l("YAYINDA","PUBLIC"),x+panelW-118,rowY+28);}}
@@ -575,17 +595,17 @@ public final class ErdvynLauncher {
             int w=getWidth(),h=getHeight(),boxW=Math.min(720,w-180),boxH=410,x=(w-boxW)/2,y=(h-boxH)/2;g.setColor(new Color(9,3,0,218));g.fillRect(SIDEBAR,70,w-SIDEBAR,h-70);terminalPanel(g,x,y,boxW,boxH);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("YÖNETİCİ DUYURU TERMİNALİ","ADMIN DISPATCH TERMINAL"),x+20,y+30);g.setColor(LINE);g.drawLine(x+12,y+44,x+boxW-12,y+44);
             g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("BAŞLIK","TITLE"),x+20,y+70);newsTitleInputBounds.setBounds(x+18,y+80,boxW-36,42);g.setColor(newsField==0?AMBER:LINE);g.drawRect(newsTitleInputBounds.x,newsTitleInputBounds.y,newsTitleInputBounds.width,newsTitleInputBounds.height);g.setFont(font(13,Font.PLAIN));g.setColor(newsTitleDraft.isBlank()?MUTED:PAPER);g.drawString(newsTitleDraft.isBlank()?l("Duyuru başlığı...","Dispatch title..."):newsTitleDraft+(newsField==0&&((int)(time*2)&1)==0?"_":""),x+30,y+107);
             g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("İÇERİK","BODY"),x+20,y+151);newsBodyInputBounds.setBounds(x+18,y+162,boxW-36,158);g.setColor(newsField==1?AMBER:LINE);g.drawRect(newsBodyInputBounds.x,newsBodyInputBounds.y,newsBodyInputBounds.width,newsBodyInputBounds.height);g.setFont(font(12,Font.PLAIN));g.setColor(newsBodyDraft.isBlank()?MUTED:PAPER);drawWrapped(g,newsBodyDraft.isBlank()?l("Herkesin göreceği duyuruyu yaz...","Write the dispatch everyone will see..."):newsBodyDraft+(newsField==1&&((int)(time*2)&1)==0?"_":""),x+30,y+188,boxW-60,20,7);
-            newsCancelBounds.setBounds(x+18,y+344,180,42);newsPublishBounds.setBounds(x+boxW-238,y+344,220,42);terminalButton(g,newsCancelBounds,false,"[ "+l("İPTAL","CANCEL")+" ]");terminalButton(g,newsPublishBounds,false,"[ "+(newsPublishInProgress?l("YAYINLANIYOR","PUBLISHING"):l("YAYINLA","PUBLISH"))+" ]");
+            newsCancelBounds.setBounds(x+18,y+344,180,42);newsPublishBounds.setBounds(x+boxW-238,y+344,220,42);terminalButton(g,newsCancelBounds,"[ "+l("İPTAL","CANCEL")+" ]");terminalButton(g,newsPublishBounds,"[ "+(newsPublishInProgress?l("YAYINLANIYOR","PUBLISHING"):l("YAYINLA","PUBLISH"))+" ]");
         }
 
         private static String formatNewsDate(long epoch){return DateTimeFormatter.ofPattern("dd.MM.yyyy").withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(epoch));}
 
         private void paintProfileMenu(Graphics2D g){
-            int boxW=354,x=profileBounds.x+profileBounds.width-boxW,y=66;terminalPanel(g,x,y,boxW,234);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("HESAP TERMİNALİ","ACCOUNT TERMINAL"),x+16,y+27);g.setColor(LINE);g.drawLine(x+12,y+38,x+boxW-12,y+38);g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);g.drawString(l("KULLANICI","USER"),x+18,y+67);g.setColor(PAPER);g.drawString(accountSession==null?"--":accountSession.name(),x+138,y+67);g.setColor(MUTED);g.drawString("UUID",x+18,y+91);g.setColor(accountSession==null?AMBER:PAPER);String uuid=accountSession==null?l("BAĞLANTI GEREKLİ","LINK REQUIRED"):accountSession.uuid().toString();g.drawString(uuid.length()>24?uuid.substring(0,24)+"...":uuid,x+138,y+91);microsoftBounds.setBounds(x+18,y+112,boxW-36,38);erdvynAccountBounds.setBounds(x+18,y+160,boxW-36,38);terminalButton(g,microsoftBounds,false,"[ "+(accountLoginInProgress?l("GİRİŞ BEKLENİYOR","WAITING FOR SIGN-IN"):t("microsoftLogin"))+" ]");terminalButton(g,erdvynAccountBounds,false,"[ "+t("erdvynLogin")+" ]");if(!accountNotice.isBlank()){g.setFont(font(10,Font.PLAIN));g.setColor(MUTED);drawWrapped(g,localized(accountNotice),x+18,y+216,boxW-36,14,2);}
+            int boxW=354,x=profileBounds.x+profileBounds.width-boxW,y=66;terminalPanel(g,x,y,boxW,234);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("HESAP TERMİNALİ","ACCOUNT TERMINAL"),x+16,y+27);g.setColor(LINE);g.drawLine(x+12,y+38,x+boxW-12,y+38);g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);g.drawString(l("KULLANICI","USER"),x+18,y+67);g.setColor(PAPER);g.drawString(accountSession==null?"--":accountSession.name(),x+138,y+67);g.setColor(MUTED);g.drawString("UUID",x+18,y+91);g.setColor(accountSession==null?AMBER:PAPER);String uuid=accountSession==null?l("BAĞLANTI GEREKLİ","LINK REQUIRED"):accountSession.uuid().toString();g.drawString(uuid.length()>24?uuid.substring(0,24)+"...":uuid,x+138,y+91);microsoftBounds.setBounds(x+18,y+112,boxW-36,38);erdvynAccountBounds.setBounds(x+18,y+160,boxW-36,38);terminalButton(g,microsoftBounds,"[ "+(accountLoginInProgress?l("GİRİŞ BEKLENİYOR","WAITING FOR SIGN-IN"):accountSession!=null?l("ÇIKIŞ YAP","SIGN OUT"):t("microsoftLogin"))+" ]");terminalButton(g,erdvynAccountBounds,"[ "+t("erdvynLogin")+" ]");if(!accountNotice.isBlank()){g.setFont(font(10,Font.PLAIN));g.setColor(MUTED);drawWrapped(g,localized(accountNotice),x+18,y+216,boxW-36,14,2);}
         }
 
         private void paintNotifications(Graphics2D g){
-            int boxW=390,x=notificationBounds.x+notificationBounds.width-boxW,y=66,rows=Math.max(1,Math.min(5,notifications.size())),updateH=launcherInstaller==null?0:54,boxH=58+rows*58+updateH;notificationPanelBounds.setBounds(x,y,boxW,boxH);terminalPanel(g,x,y,boxW,boxH);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("BİLDİRİM HATTI","NOTIFICATION BUS"),x+16,y+27);g.setColor(LINE);g.drawLine(x+12,y+39,x+boxW-12,y+39);if(notifications.isEmpty()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("[ YENİ BİLDİRİM YOK ]","[ NO NEW NOTIFICATIONS ]"),x+18,y+73);}else{int first=Math.max(0,notifications.size()-5);for(int i=first;i<notifications.size();i++){int row=i-first,ry=y+55+row*58;g.setColor(new Color(255,145,42,22));g.fillRect(x+12,ry-6,boxW-24,48);g.setColor(row==rows-1?AMBER:LINE);g.drawLine(x+12,ry+47,x+boxW-12,ry+47);g.setFont(font(11,Font.PLAIN));g.setColor(PAPER);drawWrapped(g,localized(notifications.get(i)),x+22,ry+13,boxW-44,15,2);}}if(launcherInstaller!=null){updateBounds.setBounds(x+14,y+boxH-46,boxW-28,34);terminalButton(g,updateBounds,false,"[ "+l("LAUNCHER GÜNCELLEMESİNİ KUR","INSTALL LAUNCHER UPDATE")+" ]");}else updateBounds.setBounds(0,0,0,0);}
+            int boxW=390,x=notificationBounds.x+notificationBounds.width-boxW,y=66,rows=Math.max(1,Math.min(5,notifications.size())),updateH=launcherInstaller==null?0:54,boxH=58+rows*58+updateH;notificationPanelBounds.setBounds(x,y,boxW,boxH);terminalPanel(g,x,y,boxW,boxH);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("BİLDİRİM HATTI","NOTIFICATION BUS"),x+16,y+27);g.setColor(LINE);g.drawLine(x+12,y+39,x+boxW-12,y+39);if(notifications.isEmpty()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("[ YENİ BİLDİRİM YOK ]","[ NO NEW NOTIFICATIONS ]"),x+18,y+73);}else{int first=Math.max(0,notifications.size()-5);for(int i=first;i<notifications.size();i++){int row=i-first,ry=y+55+row*58;g.setColor(new Color(255,145,42,22));g.fillRect(x+12,ry-6,boxW-24,48);g.setColor(row==rows-1?AMBER:LINE);g.drawLine(x+12,ry+47,x+boxW-12,ry+47);g.setFont(font(11,Font.PLAIN));g.setColor(PAPER);drawWrapped(g,localized(notifications.get(i)),x+22,ry+13,boxW-44,15,2);}}if(launcherInstaller!=null){updateBounds.setBounds(x+14,y+boxH-46,boxW-28,34);terminalButton(g,updateBounds,"[ "+l("LAUNCHER GÜNCELLEMESİNİ KUR","INSTALL LAUNCHER UPDATE")+" ]");}else updateBounds.setBounds(0,0,0,0);}
 
         private static void paintBellIcon(Graphics2D g,int cx,int cy,Color color){g.setColor(color);g.drawLine(cx-6,cy+5,cx+6,cy+5);g.drawLine(cx-6,cy+5,cx-4,cy+2);g.drawLine(cx+6,cy+5,cx+4,cy+2);g.drawLine(cx-4,cy+2,cx-4,cy-5);g.drawLine(cx+4,cy+2,cx+4,cy-5);g.drawLine(cx-4,cy-5,cx-2,cy-8);g.drawLine(cx+4,cy-5,cx+2,cy-8);g.drawLine(cx-2,cy-8,cx+2,cy-8);g.fillRect(cx-1,cy+8,3,2);}
 
@@ -593,7 +613,7 @@ public final class ErdvynLauncher {
             int x=contentLeft(),y=104,w=getWidth();sectionTitle(g,x,y,l("PAKET İZLEYİCİ","PACKAGE MONITOR"),t("packTitle"),"");int panelY=y+72,panelW=w-x-32,panelH=getHeight()-panelY-34;terminalPanel(g,x,panelY,panelW,panelH);g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("GERÇEK DOSYA DENETİMİ / SHA-256","REAL FILE AUDIT / SHA-256"),x+18,panelY+29);g.setColor(packVerifying?AMBER:PAPER);String state=packVerifying?l("ÇALIŞIYOR","RUNNING"):l("HAZIR","READY");g.drawString(state,x+panelW-g.getFontMetrics().stringWidth(state)-18,panelY+29);g.setColor(LINE);g.drawLine(x+12,panelY+42,x+panelW-12,panelY+42);
             int progressY=panelY+58;g.setColor(new Color(82,35,9));g.fillRect(x+18,progressY,panelW-36,18);g.setColor(AMBER);g.fillRect(x+18,progressY,(int)((panelW-36)*Math.max(0,Math.min(1,packProgress))),18);g.setFont(font(11,Font.PLAIN));g.setColor(PAPER);centered(g,String.format(Locale.ROOT,"%03d%%  /  %d MOD  /  %d %s  /  %s",(int)(packProgress*100),packSummary.mods(),packSummary.files(),l("DOSYA","FILES"),formatBytes(packSummary.bytes())),x+panelW/2,progressY+14);
             int logY=panelY+92,logH=Math.max(120,panelH-166);terminalPanel(g,x+16,logY,panelW-32,logH);g.setFont(font(11,Font.PLAIN));int maxLines=Math.max(5,(logH-34)/19),start=Math.max(0,packLog.size()-maxLines);if(packLog.isEmpty()){g.setColor(MUTED);g.drawString(l("> DOSYA DENETİMİ BAŞLATILMADI","> FILE AUDIT HAS NOT STARTED"),x+30,logY+28);}else for(int i=start;i<packLog.size();i++){String line=localized(packLog.get(i));g.setColor(line.contains("[FAIL]")||line.contains("[MISSING]")?RED:line.contains("[GET]")?AMBER:PAPER);g.drawString(line,x+30,logY+27+(i-start)*19);}
-            int by=panelY+panelH-58,statusX;if(!packInstalled){installPackBounds.setBounds(x+16,by,230,40);verifyBounds.setBounds(x+260,by,230,40);folderBounds.setBounds(x+504,by,190,40);terminalButton(g,installPackBounds,false,packVerifying?"[ "+l("KURULUYOR","INSTALLING")+" ]":"[ "+l("MOD PAKETİNİ KUR","INSTALL MODPACK")+" ]");statusX=x+710;}else{installPackBounds.setBounds(0,0,0,0);verifyBounds.setBounds(x+16,by,260,40);folderBounds.setBounds(x+290,by,210,40);statusX=x+520;}terminalButton(g,verifyBounds,hoverVerify,packVerifying?"[ "+l("DOĞRULANIYOR","VERIFYING")+" ]":"[ "+t("repair")+" ]");terminalButton(g,folderBounds,hoverFolder,"[ "+t("openFolder")+" ]");if(!packStatus.isBlank()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);String status=fitTerminalLine(g,localized(packStatus),Math.max(80,x+panelW-statusX-18));g.drawString(status,statusX,by+25);}
+            int by=panelY+panelH-58,statusX;if(!packInstalled){installPackBounds.setBounds(x+16,by,230,40);verifyBounds.setBounds(x+260,by,230,40);folderBounds.setBounds(x+504,by,190,40);terminalButton(g,installPackBounds,packVerifying?"[ "+l("KURULUYOR","INSTALLING")+" ]":"[ "+l("MOD PAKETİNİ KUR","INSTALL MODPACK")+" ]");statusX=x+710;}else{installPackBounds.setBounds(0,0,0,0);verifyBounds.setBounds(x+16,by,260,40);folderBounds.setBounds(x+290,by,210,40);statusX=x+520;}terminalButton(g,verifyBounds,hoverVerify,packVerifying?"[ "+l("DOĞRULANIYOR","VERIFYING")+" ]":"[ "+t("repair")+" ]");terminalButton(g,folderBounds,hoverFolder,"[ "+t("openFolder")+" ]");if(!packStatus.isBlank()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);String status=fitTerminalLine(g,localized(packStatus),Math.max(80,x+panelW-statusX-18));g.drawString(status,statusX,by+25);}
         }
 
         private void paintSettings(Graphics2D g) {
@@ -602,11 +622,11 @@ public final class ErdvynLauncher {
             boolean compact=panelH<500;int rowH=compact?42:46,rowGap=compact?6:10,toggleH=compact?46:56,innerTop=panelY+54;
             int ly=innerTop;optionStepper(g,l("AYRILAN RAM","ALLOCATED RAM"),gameOptions.ramGb()+" GB  "+l("(8 GB ÖNERİLEN)","(8 GB RECOMMENDED)"),x+18,ly,leftW-36,rowH,ramMinusBounds,ramPlusBounds,.68);ly+=rowH+rowGap;optionStepper(g,l("GÖRÜŞ MESAFESİ","RENDER DISTANCE"),gameOptions.renderDistance()+" "+l("BÖLGE","CHUNKS"),x+18,ly,leftW-36,rowH,renderMinusBounds,renderPlusBounds,.48);ly+=rowH+rowGap;optionStepper(g,l("SİMÜLASYON","SIMULATION"),gameOptions.simulationDistance()+" "+l("BÖLGE","CHUNKS"),x+18,ly,leftW-36,rowH,simulationMinusBounds,simulationPlusBounds,.36);ly+=rowH+rowGap+2;
             settingRow(g,x+18,ly,leftW-36,toggleH,l("OTOMATİK GÜNCELLEME","AUTO UPDATE"),autoUpdate,0);ly+=toggleH+rowGap;settingRow(g,x+18,ly,leftW-36,toggleH,l("OTOMATİK BAĞLAN","AUTO CONNECT"),autoConnect,1);ly+=toggleH+(compact?12:24);
-            String[] folderLabels={l("OYUN KLASÖRÜ","INSTANCE FOLDER"),l("MODLAR","MODS"),l("KAYNAK PAKETLERİ","RESOURCE PACKS"),l("SHADER PAKETLERİ","SHADER PACKS")};int folderH=compact?32:36,folderGap=compact?7:10,folderW=(leftW-48)/2;for(int i=0;i<settingsFolderBounds.length;i++){int fy=ly+(i/2)*(folderH+folderGap),fx=x+18+(i%2)*(folderW+12);settingsFolderBounds[i].setBounds(fx,fy,folderW,folderH);terminalButton(g,settingsFolderBounds[i],false,"[ "+folderLabels[i]+" ]");}
+            String[] folderLabels={l("OYUN KLASÖRÜ","INSTANCE FOLDER"),l("MODLAR","MODS"),l("KAYNAK PAKETLERİ","RESOURCE PACKS"),l("SHADER PAKETLERİ","SHADER PACKS")};int folderH=compact?32:36,folderGap=compact?7:10,folderW=(leftW-48)/2;for(int i=0;i<settingsFolderBounds.length;i++){int fy=ly+(i/2)*(folderH+folderGap),fx=x+18+(i%2)*(folderW+12);settingsFolderBounds[i].setBounds(fx,fy,folderW,folderH);terminalButton(g,settingsFolderBounds[i],"[ "+folderLabels[i]+" ]");}
             int ry=innerTop;settingRow(g,rightX+18,ry,rightW-36,toggleH,l("TAM EKRAN","FULLSCREEN"),gameOptions.fullscreen(),2);ry+=toggleH+rowGap;vsyncBounds.setBounds(rightX+18,ry,rightW-36,toggleH);drawSimpleToggle(g,vsyncBounds,l("DİKEY SENKRONİZASYON","VERTICAL SYNC"),gameOptions.vsync());ry+=toggleH+rowGap+2;optionStepper(g,l("MAKSİMUM FPS","MAXIMUM FPS"),Integer.toString(gameOptions.maxFps()),rightX+18,ry,rightW-36,rowH,fpsMinusBounds,fpsPlusBounds,.78);ry+=rowH+rowGap;optionStepper(g,l("ARAYÜZ ÖLÇEĞİ","GUI SCALE"),gameOptions.guiScale()==0?l("OTOMATİK","AUTO"):Integer.toString(gameOptions.guiScale()),rightX+18,ry,rightW-36,rowH,guiMinusBounds,guiPlusBounds,.42);ry+=rowH+(compact?10:18);
-            int langH=compact?34:38;g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("ARAYÜZ DİLİ","INTERFACE LANGUAGE"),rightX+24,ry+langH/2+5);settingsLanguageBounds.setBounds(rightX+rightW-190,ry,164,langH);terminalButton(g,settingsLanguageBounds,false,language==Language.TR?"[ TR ]   EN":"TR   [ EN ]");ry+=langH+(compact?9:16);g.setColor(LINE);g.drawLine(rightX+14,ry,rightX+rightW-14,ry);ry+=compact?18:26;
+            int langH=compact?34:38;g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("ARAYÜZ DİLİ","INTERFACE LANGUAGE"),rightX+24,ry+langH/2+5);settingsLanguageBounds.setBounds(rightX+rightW-190,ry,164,langH);terminalButton(g,settingsLanguageBounds,language==Language.TR?"[ TR ]   EN":"TR   [ EN ]");ry+=langH+(compact?9:16);g.setColor(LINE);g.drawLine(rightX+14,ry,rightX+rightW-14,ry);ry+=compact?18:26;
             if(!compact){g.setFont(dataFont(11,Font.PLAIN));g.setColor(PAPER);drawWrapped(g,l("Minecraft açıldıktan sonra launcher tamamen kapanır. Ayarlar options.txt dosyasına anında yazılır.","The launcher exits completely after Minecraft starts. Changes are written to options.txt immediately."),rightX+20,ry,rightW-40,18,3);ry+=58;}
-            int specialH=compact?32:36,specialW=(rightW-52)/2,specialY=Math.min(panelY+panelH-specialH-16,ry);optionsFileBounds.setBounds(rightX+18,specialY,specialW,specialH);configFolderBounds.setBounds(rightX+30+specialW,specialY,specialW,specialH);terminalButton(g,optionsFileBounds,false,"[ OPTIONS.TXT ]");terminalButton(g,configFolderBounds,false,l("[ YAPILANDIRMA ]","[ CONFIG ]"));
+            int specialH=compact?32:36,specialW=(rightW-52)/2,specialY=Math.min(panelY+panelH-specialH-16,ry);optionsFileBounds.setBounds(rightX+18,specialY,specialW,specialH);configFolderBounds.setBounds(rightX+30+specialW,specialY,specialW,specialH);terminalButton(g,optionsFileBounds,"[ OPTIONS.TXT ]");terminalButton(g,configFolderBounds,l("[ YAPILANDIRMA ]","[ CONFIG ]"));
         }
 
         private void paintAdmin(Graphics2D g){
@@ -617,9 +637,9 @@ public final class ErdvynLauncher {
             if(!admin){g.setFont(font(13,Font.PLAIN));g.setColor(MUTED);g.drawString(l("Bu terminal yalnızca sunucunun doğruladığı yönetici hesaplarına açıktır.","This terminal is available only to server-verified admin accounts."),x+24,panelY+82);return;}
             int half=(panelW-54)/2,left=x+18,right=left+half+18;g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("HESAP YETKİSİ / SADECE KÖK YÖNETİCİ","ACCOUNT ACCESS / ROOT ADMIN ONLY"),left,panelY+76);g.drawString(l("MINECRAFT KOMUT KUYRUĞU","MINECRAFT COMMAND QUEUE"),right,panelY+76);
             adminTargetBounds.setBounds(left,panelY+92,half,42);adminCommandBounds.setBounds(right,panelY+92,half,42);paintTerminalInput(g,adminTargetBounds,adminField==0,adminTargetDraft,l("Oyuncu adı veya UUID","Player name or UUID"));paintTerminalInput(g,adminCommandBounds,adminField==1,adminCommandDraft,l("İzinli Minecraft komutu","Allowlisted Minecraft command"));
-            int bw=(half-12)/2;if(root){adminGrantBounds.setBounds(left,panelY+150,bw,40);adminRevokeBounds.setBounds(left+bw+12,panelY+150,bw,40);terminalButton(g,adminGrantBounds,false,"[ "+l("YÖNETİCİ YAP","GRANT ADMIN")+" ]");terminalButton(g,adminRevokeBounds,false,"[ "+l("YETKİYİ AL","REVOKE ADMIN")+" ]");}else{adminGrantBounds.setBounds(0,0,0,0);adminRevokeBounds.setBounds(0,0,0,0);g.setColor(LINE);g.drawRect(left,panelY+150,half,40);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);centered(g,l("YETKİ DEVRİ: KÖK YÖNETİCİYE KİLİTLİ","DELEGATION: LOCKED TO ROOT ADMIN"),left+half/2,panelY+175);}
-            adminBanBounds.setBounds(right,panelY+150,bw,40);adminUnbanBounds.setBounds(right+bw+12,panelY+150,bw,40);terminalButton(g,adminBanBounds,false,"[ "+l("OYUNCUYU BANLA","BAN PLAYER")+" ]");terminalButton(g,adminUnbanBounds,false,"[ "+l("BANI KALDIR","UNBAN PLAYER")+" ]");
-            adminExecuteBounds.setBounds(right,panelY+206,half,42);terminalButton(g,adminExecuteBounds,false,"[ "+(adminActionInProgress?l("İLETİLİYOR","DISPATCHING"):l("KOMUTU İLET","DISPATCH COMMAND"))+" ]");
+            int bw=(half-12)/2;if(root){adminGrantBounds.setBounds(left,panelY+150,bw,40);adminRevokeBounds.setBounds(left+bw+12,panelY+150,bw,40);terminalButton(g,adminGrantBounds,"[ "+l("YÖNETİCİ YAP","GRANT ADMIN")+" ]");terminalButton(g,adminRevokeBounds,"[ "+(pendingConfirm.equals("revoke")?l("ONAYLA: YETKİYİ AL","CONFIRM: REVOKE"):l("YETKİYİ AL","REVOKE ADMIN"))+" ]");}else{adminGrantBounds.setBounds(0,0,0,0);adminRevokeBounds.setBounds(0,0,0,0);g.setColor(LINE);g.drawRect(left,panelY+150,half,40);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);centered(g,l("YETKİ DEVRİ: KÖK YÖNETİCİYE KİLİTLİ","DELEGATION: LOCKED TO ROOT ADMIN"),left+half/2,panelY+175);}
+            adminBanBounds.setBounds(right,panelY+150,bw,40);adminUnbanBounds.setBounds(right+bw+12,panelY+150,bw,40);terminalButton(g,adminBanBounds,"[ "+(pendingConfirm.equals("ban")?l("ONAYLA: BANLA","CONFIRM: BAN"):l("OYUNCUYU BANLA","BAN PLAYER"))+" ]");terminalButton(g,adminUnbanBounds,"[ "+l("BANI KALDIR","UNBAN PLAYER")+" ]");
+            adminExecuteBounds.setBounds(right,panelY+206,half,42);terminalButton(g,adminExecuteBounds,"[ "+(adminActionInProgress?l("İLETİLİYOR","DISPATCHING"):l("KOMUTU İLET","DISPATCH COMMAND"))+" ]");
             g.setColor(LINE);g.drawLine(x+12,panelY+272,x+panelW-12,panelY+272);g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("YÖNETİCİLER / DOĞRULANMIŞ HESAPLAR","ADMINISTRATORS / VERIFIED ACCOUNTS"),x+20,panelY+300);
             int listY=panelY+316,rowH=50;if(adminAccounts.isEmpty()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("-- YÖNETİCİ LİSTESİ SENKRONİZE EDİLİYOR --","-- SYNCHRONIZING ADMIN LIST --"),x+22,listY+28);}else for(int i=0;i<adminAccounts.size()&&i<4;i++){ErdvynApiClient.AdminAccount item=adminAccounts.get(i);int ry=listY+i*rowH;g.setColor(new Color(255,145,42,18));g.fillRect(x+18,ry,panelW-36,rowH-4);g.setColor(LINE);g.drawRect(x+18,ry,panelW-36,rowH-4);BufferedImage head=adminHeads.get(item.uuid());if(head!=null)g.drawImage(head,x+24,ry+6,34,34,null);else{g.setColor(new Color(255,145,42,30));g.fillRect(x+24,ry+6,34,34);g.setColor(AMBER);g.drawRect(x+24,ry+6,34,34);}g.setFont(font(12,Font.PLAIN));g.setColor(PAPER);g.drawString(item.minecraftName(),x+72,ry+20);g.setFont(font(10,Font.PLAIN));g.setColor(item.root()?AMBER_HOT:MUTED);g.drawString(item.root()?l("KÖK YÖNETİCİ","ROOT ADMIN"):l("YÖNETİCİ","ADMIN"),x+72,ry+38);String date=item.grantedAt()<=0?"--":DateTimeFormatter.ofPattern("dd.MM.yyyy  HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochSecond(item.grantedAt()));g.setColor(MUTED);g.drawString(l("YETKİ TARİHİ ","GRANTED ")+date,x+panelW-260,ry+29);}
             int footerY=panelY+panelH-56;g.setFont(font(10,Font.PLAIN));g.setColor(root?PAPER:AMBER);g.drawString(root?l("KÖK YÖNETİCİ / UUID KİLİTLİ","ROOT ADMIN / UUID LOCKED"):l("YÖNETİCİ / YETKİ DEVRİ KAPALI","ADMIN / DELEGATION DISABLED"),x+20,footerY);if(!adminNotice.isBlank()){g.setColor(adminNotice.startsWith("ERROR")||adminNotice.startsWith("HATA")?RED:PAPER);String notice=fitTerminalLine(g,localized(adminNotice),panelW-280);g.drawString(notice,x+260,footerY);}
@@ -629,9 +649,9 @@ public final class ErdvynLauncher {
 
         private void paintGamePanel(Graphics2D g){
             int x=contentLeft(),y=104,w=getWidth(),h=getHeight();sectionTitle(g,x,y,l("AĞ TERMİNALİ","NETWORK TERMINAL"),t("gamePanel"),"");int panelY=y+72,panelW=w-x-32,panelH=h-panelY-34,leftW=Math.max(275,Math.min(340,panelW/3));terminalPanel(g,x,panelY,leftW,panelH);terminalPanel(g,x+leftW+12,panelY,panelW-leftW-12,panelH);g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("OYUNCU / BAĞLANTI","PLAYER / LINK"),x+14,panelY+28);g.setColor(MUTED);g.drawString(String.format(Locale.ROOT,"%02d / %02d",onlinePlayers.size(),Math.max(0,serverSnapshot.maxPlayers())),x+leftW-76,panelY+28);g.setColor(LINE);g.drawLine(x+10,panelY+40,x+leftW-10,panelY+40);
-            if(onlinePlayers.isEmpty()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("-- BAĞLANTI BEKLEMEDE --","-- LINK STANDBY --"),x+16,panelY+72);}else for(int i=0;i<onlinePlayers.size()&&i<8;i++){int py=panelY+60+i*42;g.setColor(LINE);g.drawRect(x+14,py-12,22,22);g.setColor(AMBER);g.fillRect(x+20,py-6,10,10);g.setFont(font(11,Font.PLAIN));g.setColor(PAPER);g.drawString(onlinePlayers.get(i),x+48,py+3);g.setColor(MUTED);g.drawString(l("PING İYİ","PING OK"),x+leftW-78,py+3);}
+            if(onlinePlayers.isEmpty()){g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("-- BAĞLANTI BEKLEMEDE --","-- LINK STANDBY --"),x+16,panelY+72);}else for(int i=0;i<onlinePlayers.size()&&i<8;i++){int py=panelY+60+i*42;g.setColor(LINE);g.drawRect(x+14,py-12,22,22);g.setColor(AMBER);g.fillRect(x+20,py-6,10,10);g.setFont(font(11,Font.PLAIN));g.setColor(PAPER);g.drawString(onlinePlayers.get(i),x+48,py+3);}
             int chatX=x+leftW+12,chatW=panelW-leftW-12;g.setFont(font(12,Font.PLAIN));g.setColor(AMBER);g.drawString(l("ERDVYN SOHBET HATTI","ERDVYN CHAT BUS"),chatX+14,panelY+28);g.setColor(LINE);g.drawLine(chatX+10,panelY+40,chatX+chatW-10,panelY+40);int baseline=panelY+70;List<ChatLine> visible=chatLines.size()>10?chatLines.subList(chatLines.size()-10,chatLines.size()):chatLines;for(ChatLine line:visible){g.setFont(font(10,Font.PLAIN));g.setColor(MUTED);g.drawString(line.time.format(DateTimeFormatter.ofPattern("HH:mm")),chatX+14,baseline);g.setColor(AMBER);g.fillRect(chatX+65,baseline-10,12,12);g.setColor(PAPER);g.drawString(line.owned?l("SİSTEM","SYSTEM"):line.author,chatX+86,baseline);g.setColor(MUTED);drawWrapped(g,line.owned?localized(line.message):line.message,chatX+164,baseline,chatW-184,16,2);baseline+=34;}
-            chatInputBounds.setBounds(chatX+12,panelY+panelH-52,chatW-132,36);chatSendBounds.setBounds(chatX+chatW-110,panelY+panelH-52,98,36);g.setColor(chatFocused?AMBER:LINE);g.drawRect(chatInputBounds.x,chatInputBounds.y,chatInputBounds.width,chatInputBounds.height);g.setFont(font(11,Font.PLAIN));g.setColor(chatDraft.isBlank()?MUTED:PAPER);g.drawString("> "+(chatDraft.isBlank()?t("writeMessage"):chatDraft+((int)(time*2)%2==0&&chatFocused?"_":"")),chatInputBounds.x+10,chatInputBounds.y+23);terminalButton(g,chatSendBounds,false,"[ "+t("send")+" ]");
+            chatInputBounds.setBounds(chatX+12,panelY+panelH-52,chatW-132,36);chatSendBounds.setBounds(chatX+chatW-110,panelY+panelH-52,98,36);g.setColor(chatFocused?AMBER:LINE);g.drawRect(chatInputBounds.x,chatInputBounds.y,chatInputBounds.width,chatInputBounds.height);g.setFont(font(11,Font.PLAIN));g.setColor(chatDraft.isBlank()?MUTED:PAPER);g.drawString("> "+(chatDraft.isBlank()?t("writeMessage"):chatDraft+((int)(time*2)%2==0&&chatFocused?"_":"")),chatInputBounds.x+10,chatInputBounds.y+23);terminalButton(g,chatSendBounds,"[ "+t("send")+" ]");
         }
 
         private final LocalSurveyMap localSurvey=new LocalSurveyMap();
@@ -664,17 +684,20 @@ public final class ErdvynLauncher {
         }
 
         static Rectangle cameraBounds(int w,int h){int feedW=Math.max(380,(int)((w-SIDEBAR)*.43));feedW=Math.min(feedW,w-SIDEBAR-420);int feedH=(int)Math.round(feedW*9.0/16.0);feedH=Math.min(feedH,Math.max(220,h-360));return new Rectangle(w-feedW-28,104,feedW,feedH);}
-        private int contentLeft(){return SIDEBAR+32+(int)(126*sidebarExpand);}
+        private int contentLeft(){return SIDEBAR+32;}
+        private boolean overSidebar(Point p){return p.x<SIDEBAR+126*sidebarExpand;}
 
         private static void terminalPanel(Graphics2D g,int x,int y,int w,int h){g.setColor(new Color(12,5,2,224));g.fillRect(x,y,w,h);g.setColor(LINE);g.drawRect(x,y,w,h);g.setColor(new Color(255,145,42,35));g.drawRect(x+3,y+3,w-6,h-6);}
         private static void terminalLabel(Graphics2D g,String text,int x,int y){g.setFont(font(11,Font.PLAIN));g.setColor(AMBER);g.drawString(text,x,y);}
+        /** Hover comes from the pointer, so every bracket button lights up, not only the few that tracked their own flag. */
+        private void terminalButton(Graphics2D g,Rectangle r,String text){terminalButton(g,r,r.contains(mouse)&&!overSidebar(mouse),text);}
         private static void terminalButton(Graphics2D g,Rectangle r,boolean hover,String text){g.setColor(hover?new Color(86,36,8,210):new Color(18,7,2,240));g.fillRect(r.x,r.y,r.width,r.height);g.setColor(hover?AMBER_HOT:LINE);g.drawRect(r.x,r.y,r.width,r.height);g.setFont(font(12,Font.PLAIN));g.setColor(hover?PAPER:AMBER);centered(g,text,r.x+r.width/2,r.y+r.height/2+5);}
         private static void drawSegments(Graphics2D g,int x,int y,int w,int h,int count,double progress){int gap=3,sw=Math.max(3,(w-gap*(count-1))/count),active=(int)Math.round(count*Math.max(0,Math.min(1,progress)));for(int i=0;i<count;i++){g.setColor(i<active?AMBER:new Color(74,31,9));g.fillRect(x+i*(sw+gap),y,sw,h);g.setColor(LINE);g.drawRect(x+i*(sw+gap),y,sw,h);}}
         private void statBlock(Graphics2D g,int x,int y,int w,int h,String label,String value,String register,int icon){terminalPanel(g,x,y,w,h);int pulse=150+(int)(85*(.5+.5*Math.sin(time*2.2+icon)));Color liveAmber=new Color(255,145,42,pulse);paintNavIcon(g,icon,x+w-30,y+27,liveAmber);g.setFont(font(12,Font.PLAIN));g.setColor(MUTED);g.drawString(label,x+14,y+25);g.setFont(font(25,Font.PLAIN));g.setColor(PAPER);g.drawString(value,x+14,y+60);g.setColor(LINE);g.drawLine(x+12,y+72,x+w-12,y+72);g.setFont(font(11,Font.PLAIN));g.setColor(AMBER);g.drawString(register,x+14,y+94);g.setColor(((int)(time*2+icon)&1)==0?MUTED:AMBER);g.drawString(l("DURUM / İYİ","STATUS / OK"),x+w-126,y+94);int cursor=x+12+(int)((time*54+icon*31)%Math.max(1,w-32));g.setColor(liveAmber);g.fillRect(cursor,y+71,12,2);}
 
-        private void paintSectionGlyph(Graphics2D g,int kind,int x,int y){g.setColor(LINE);g.drawRect(x,y,34,34);g.setColor(new Color(255,145,42,30));g.drawRect(x+3,y+3,28,28);paintNavIcon(g,Math.max(0,Math.min(5,kind)),x+17,y+17,AMBER);}
+        private void paintSectionGlyph(Graphics2D g,int kind,int x,int y){g.setColor(LINE);g.drawRect(x,y,34,34);g.setColor(new Color(255,145,42,30));g.drawRect(x+3,y+3,28,28);paintNavIcon(g,Math.max(0,Math.min(6,kind)),x+17,y+17,AMBER);}
 
-        private void paintServerStatus(Graphics2D g,Rectangle feed){int x=feed.x,y=feed.y+feed.height+16,w=feed.width,h=getHeight()-y-28;if(h<128)return;terminalPanel(g,x,y,w,h);paintNavIcon(g,3,x+28,y+28,AMBER);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("SUNUCU DURUMU / ERDVYN DÜĞÜMÜ","SERVER STATUS / ERDVYN NODE"),x+52,y+32);g.setFont(font(12,Font.PLAIN));g.setColor(serverSnapshot.online()?PAPER:AMBER);String state=serverSnapshot.online()?l("[ ÇEVRİMİÇİ ]","[ ONLINE ]"):l("[ BEKLEMEDE ]","[ STANDBY ]");g.drawString(state,x+w-g.getFontMetrics().stringWidth(state)-18,y+32);g.setColor(LINE);g.drawLine(x+12,y+46,x+w-12,y+46);
+        private void paintServerStatus(Graphics2D g,Rectangle feed){int x=feed.x,y=feed.y+feed.height+16,w=feed.width,h=getHeight()-y-28;if(h<128)return;terminalPanel(g,x,y,w,h);paintNavIcon(g,3,x+28,y+28,AMBER);g.setFont(font(13,Font.PLAIN));g.setColor(AMBER);g.drawString(l("SUNUCU DURUMU / ERDVYN DÜĞÜMÜ","SERVER STATUS / ERDVYN NODE"),x+52,y+32);g.setFont(font(12,Font.PLAIN));g.setColor(serverSnapshot.online()?PAPER:AMBER);String state=serverSnapshot.online()?l("[ ÇEVRİMİÇİ ]","[ ONLINE ]"):l("[ ÇEVRİMDIŞI ]","[ OFFLINE ]");g.drawString(state,x+w-g.getFontMetrics().stringWidth(state)-18,y+32);g.setColor(LINE);g.drawLine(x+12,y+46,x+w-12,y+46);
             String players=serverSnapshot.online()?String.format(Locale.ROOT,"%02d / %02d",serverSnapshot.players(),serverSnapshot.maxPlayers()):"-- / --";String latency=serverSnapshot.online()?serverSnapshot.latencyMs()+" MS":"--- MS";String tps=apiStatus.tps()==null?"--.-- TPS":String.format(Locale.ROOT,"%.2f TPS",apiStatus.tps());String uptime=apiStatus.uptimeSeconds()==null?"--:--:--":formatUptime(apiStatus.uptimeSeconds());String[][] rows={{l("ADRES","ADDRESS"),LauncherPaths.serverAddress()},{l("OYUNCULAR","PLAYERS"),players},{l("GECİKME","LATENCY"),latency},{"TPS",tps},{l("SOHBET HATTI","CHAT BUS"),hub.connected()?l("BAĞLI","LINKED"):l("BEKLEMEDE","STANDBY")},{l("ÇALIŞMA SÜRESİ","UPTIME"),uptime}};int col=Math.max(170,w/2);for(int i=0;i<rows.length;i++){int cx=x+18+(i%2)*col,cy=y+76+(i/2)*42;g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(rows[i][0],cx,cy);g.setFont(font(13,Font.PLAIN));g.setColor((i==2||i==4)&&!serverSnapshot.online()?AMBER:PAPER);g.drawString(rows[i][1],cx,cy+19);}int traceY=y+h-58;if(traceY>y+184){g.setColor(LINE);g.drawLine(x+12,traceY-12,x+w-12,traceY-12);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("BAĞLANTI ETKİNLİĞİ","LINK ACTIVITY"),x+18,traceY+10);paintSignalTrace(g,x+168,traceY-2,w-188,30,serverSnapshot.online());}}
 
         private static String formatUptime(long seconds){long hours=seconds/3600,minutes=(seconds%3600)/60,remainder=seconds%60;return String.format(Locale.ROOT,"%02d:%02d:%02d",hours,minutes,remainder);}
@@ -691,7 +714,7 @@ public final class ErdvynLauncher {
         }
 
         private void optionStepper(Graphics2D g,String label,String value,int x,int y,int w,int h,Rectangle minus,Rectangle plus,double load){
-            g.setColor(LINE);g.drawRect(x,y,w,h);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(label,x+12,y+17);g.setFont(dataFont(12,Font.PLAIN));g.setColor(PAPER);g.drawString(value,x+12,y+h-8);int buttonH=Math.max(28,h-12);minus.setBounds(x+w-82,y+6,32,buttonH);plus.setBounds(x+w-40,y+6,32,buttonH);int graphX=Math.max(x+154,x+w-182),graphW=Math.max(24,minus.x-graphX-10),mid=y+h/2+4;g.setColor(new Color(255,145,42,22));g.drawLine(graphX,mid,graphX+graphW,mid);g.setColor(new Color(255,145,42,80));for(int gx=0;gx<graphW;gx+=6){double wave=Math.sin(time*2.8+gx*.22+load*5)*load;int gy=(int)(wave*Math.max(2,h*.16));g.drawLine(graphX+gx,mid,graphX+gx,mid-gy);}terminalButton(g,minus,false,"-");terminalButton(g,plus,false,"+");
+            g.setColor(LINE);g.drawRect(x,y,w,h);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(label,x+12,y+17);g.setFont(dataFont(12,Font.PLAIN));g.setColor(PAPER);g.drawString(value,x+12,y+h-8);int buttonH=Math.max(28,h-12);minus.setBounds(x+w-82,y+6,32,buttonH);plus.setBounds(x+w-40,y+6,32,buttonH);int graphX=Math.max(x+154,x+w-182),graphW=Math.max(24,minus.x-graphX-10),mid=y+h/2+4;g.setColor(new Color(255,145,42,22));g.drawLine(graphX,mid,graphX+graphW,mid);g.setColor(new Color(255,145,42,80));for(int gx=0;gx<graphW;gx+=6){double wave=Math.sin(time*2.8+gx*.22+load*5)*load;int gy=(int)(wave*Math.max(2,h*.16));g.drawLine(graphX+gx,mid,graphX+gx,mid-gy);}terminalButton(g,minus,"-");terminalButton(g,plus,"+");
         }
 
         private void drawSimpleToggle(Graphics2D g,Rectangle bounds,String title,boolean enabled){
@@ -714,8 +737,9 @@ public final class ErdvynLauncher {
         }
 
         private void paintNavIcon(Graphics2D g, int icon, int x, int y, Color color) {
-            g.setColor(color); g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            Stroke previous=g.getStroke();g.setColor(color); g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             switch (icon) {
+                case 6 -> { Path2D shield=new Path2D.Double();shield.moveTo(x,y-11);shield.lineTo(x+9,y-7);shield.lineTo(x+8,y+3);shield.quadTo(x+5,y+9,x,y+12);shield.quadTo(x-5,y+9,x-8,y+3);shield.lineTo(x-9,y-7);shield.closePath();g.draw(shield);g.drawLine(x-4,y,x-1,y+4);g.drawLine(x-1,y+4,x+5,y-4); }
                 case 0 -> { Path2D p = new Path2D.Double(); p.moveTo(x - 9, y); p.lineTo(x, y - 8); p.lineTo(x + 9, y); p.lineTo(x + 7, y + 10); p.lineTo(x - 7, y + 10); p.closePath(); g.draw(p); }
                 case 1 -> { g.drawRoundRect(x - 9, y - 9, 18, 18, 3, 3); g.drawLine(x - 5, y - 4, x + 5, y - 4); g.drawLine(x - 5, y + 1, x + 5, y + 1); g.drawLine(x - 5, y + 6, x + 1, y + 6); }
                 case 2 -> { g.drawRoundRect(x - 10, y - 7, 20, 15, 3, 3); g.drawLine(x - 4, y - 10, x + 4, y - 10); g.drawLine(x - 4, y - 10, x - 4, y - 7); g.drawLine(x + 4, y - 10, x + 4, y - 7); }
@@ -723,6 +747,7 @@ public final class ErdvynLauncher {
                 case 4 -> { Path2D map=new Path2D.Double();map.moveTo(x-11,y-8);map.lineTo(x-4,y-11);map.lineTo(x+4,y-8);map.lineTo(x+11,y-11);map.lineTo(x+11,y+8);map.lineTo(x+4,y+11);map.lineTo(x-4,y+8);map.lineTo(x-11,y+11);map.closePath();g.draw(map);g.drawLine(x-4,y-11,x-4,y+8);g.drawLine(x+4,y-8,x+4,y+11); }
                 case 5 -> { g.drawOval(x - 8, y - 8, 16, 16); g.drawOval(x - 3, y - 3, 6, 6); for (int i=0;i<8;i++){double a=i*Math.PI/4;g.drawLine((int)(x+Math.cos(a)*9),(int)(y+Math.sin(a)*9),(int)(x+Math.cos(a)*12),(int)(y+Math.sin(a)*12));} }
             }
+            g.setStroke(previous); // panels drawn after an icon must keep their 1 px border
         }
 
         private void paintSpeakerIcon(Graphics2D g,int x,int y,boolean muted,Color color,boolean animate){Stroke old=g.getStroke();g.setStroke(new BasicStroke(2f));g.setColor(color);Path2D speaker=new Path2D.Double();speaker.moveTo(x-11,y-4);speaker.lineTo(x-6,y-4);speaker.lineTo(x,y-10);speaker.lineTo(x,y+10);speaker.lineTo(x-6,y+4);speaker.lineTo(x-11,y+4);speaker.closePath();g.draw(speaker);if(muted){g.setColor(AMBER_HOT);g.drawLine(x+5,y-6,x+13,y+6);g.drawLine(x+13,y-6,x+5,y+6);}else if(animate){int phase=(int)(time*5)%3;for(int i=0;i<3;i++){int alpha=i<=phase?230:70;g.setColor(new Color(color.getRed(),color.getGreen(),color.getBlue(),alpha));int px=x+5+i*4,half=2+i*2;g.drawLine(px,y-half,px,y+half);}}g.setStroke(old);}
@@ -778,7 +803,7 @@ public final class ErdvynLauncher {
             int maxLines=Math.max(5,(contentH-58)/21),start=Math.max(0,launchTrace.size()-maxLines);g.setFont(font(11,Font.PLAIN));for(int i=start;i<launchTrace.size();i++){String line=localized(launchTrace.get(i));g.setColor(line.startsWith("[FAIL]")?RED:line.startsWith("[WAIT]")?AMBER:line.startsWith("[GET]")?AMBER_HOT:PAPER);g.drawString(fitTerminalLine(g,line,logW-34),x+32,contentY+62+(i-start)*21);}if(launchTrace.isEmpty()){g.setColor(MUTED);g.drawString("> "+l("SİNYAL BEKLENİYOR","AWAITING SIGNAL")+(((int)(time*2)&1)==0?" _":""),x+32,contentY+64);}
 
             int sx=x+18+logW+gap+14;g.setFont(font(11,Font.PLAIN));String elapsed=formatUptime(Math.max(0,(System.currentTimeMillis()-launchStartedAtMillis)/1000));String[][] telemetry={{l("İŞLEM","PROCESS"),launchPid>0?Long.toString(launchPid):l("BEKLİYOR","PENDING")},{l("GEÇEN","ELAPSED"),elapsed},{l("BELLEK","MEMORY"),gameOptions.ramGb()+" GB"},{l("PAKET","PACK"),packSummary.version()},{l("KURULUM","INSTANCE"),"THE-FRONTIER"},{l("HEDEF","TARGET"),autoConnect?LauncherPaths.serverAddress():l("ANA MENÜ","MAIN MENU")}};for(int i=0;i<telemetry.length;i++){int ty=contentY+29+i*48;g.setColor(MUTED);g.drawString(telemetry[i][0],sx,ty);g.setFont(dataFont(11,Font.PLAIN));g.setColor(i==0&&launchPid==0?AMBER:PAPER);g.drawString(fitTerminalLine(g,telemetry[i][1],sideW-28),sx,ty+19);g.setFont(font(11,Font.PLAIN));g.setColor(new Color(255,145,42,28));g.drawLine(sx,ty+28,x+bw-30,ty+28);}
-            int traceY=y+bh-58;g.setColor(LINE);g.drawLine(x+14,traceY-12,x+bw-14,traceY-12);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("JVM ETKİNLİĞİ","JVM ACTIVITY"),x+22,traceY+10);paintSignalTrace(g,x+150,traceY-4,Math.max(160,bw-456),28,!launchFailed);if(launchFailed){launchDismissBounds.setBounds(x+bw-166,traceY-11,142,34);terminalButton(g,launchDismissBounds,false,"[ "+l("GERİ DÖN","RETURN")+" ]");}else{launchDismissBounds.setBounds(0,0,0,0);g.setColor(AMBER);g.drawString(((int)(time*3)&1)==0?l("MINECRAFT BEKLENİYOR _","AWAITING MINECRAFT _"):l("MINECRAFT BEKLENİYOR","AWAITING MINECRAFT"),x+bw-276,traceY+10);}
+            int traceY=y+bh-58;g.setColor(LINE);g.drawLine(x+14,traceY-12,x+bw-14,traceY-12);g.setFont(font(11,Font.PLAIN));g.setColor(MUTED);g.drawString(l("JVM ETKİNLİĞİ","JVM ACTIVITY"),x+22,traceY+10);paintSignalTrace(g,x+150,traceY-4,Math.max(120,bw-(launchFailed?500:456)),28,!launchFailed);if(launchFailed){launchDismissBounds.setBounds(x+bw-166,traceY-11,142,34);terminalButton(g,launchDismissBounds,"[ "+l("GERİ DÖN","RETURN")+" ]");launchLogsBounds.setBounds(x+bw-330,traceY-11,152,34);terminalButton(g,launchLogsBounds,"[ "+l("GÜNLÜKLER","OPEN LOGS")+" ]");}else{launchDismissBounds.setBounds(0,0,0,0);launchLogsBounds.setBounds(0,0,0,0);g.setColor(AMBER);g.drawString(((int)(time*3)&1)==0?l("MINECRAFT BEKLENİYOR _","AWAITING MINECRAFT _"):l("MINECRAFT BEKLENİYOR","AWAITING MINECRAFT"),x+bw-276,traceY+10);}
         }
 
         private static String fitTerminalLine(Graphics2D g,String text,int maxWidth){String value=text==null?"":text.replace('\t',' ').replaceAll("\\s+"," ").strip();if(g.getFontMetrics().stringWidth(value)<=maxWidth)return value;String suffix="...";while(value.length()>4&&g.getFontMetrics().stringWidth(value+suffix)>maxWidth)value=value.substring(0,value.length()-1);return value+suffix;}
@@ -788,7 +813,7 @@ public final class ErdvynLauncher {
             launchStatus=l("MINECRAFT BEKLENİYOR / NEOFORGE YÜKLENİYOR","AWAITING MINECRAFT / NEOFORGE LOADING");
             launchTrace.clear();
             appendLaunchTrace("[OK] JAVA 21 RUNTIME / READY");
-            appendLaunchTrace("[OK] PACK 2026.08.30.5 / SIGNATURE VERIFIED");
+            appendLaunchTrace("[OK] PACK 2026.08.30.5 / SHA-256 VERIFIED");
             appendLaunchTrace("[OK] 1187 FILES / SERVER MANIFEST MATCHED");
             appendLaunchTrace("[OK] MICROSOFT SESSION / BOUND");
             appendLaunchTrace("[EXEC] JVM / XMX "+gameOptions.ramGb()+"G / NEOFORGE 21.1.243");
@@ -802,6 +827,10 @@ public final class ErdvynLauncher {
         private void onPackLaunchProgress(PackService.Progress progress){LauncherLog.write(progress.line());SwingUtilities.invokeLater(()->{packProgress=progress.value();packStatus=progress.line();packLog.add(progress.line());if(packLog.size()>80)packLog.remove(0);int percent=(int)Math.round(progress.value()*100),bucket=percent/5;boolean notable=progress.line().contains("[GET]")||progress.line().contains("[SAVED]")||progress.line().contains("[FAIL]")||progress.line().startsWith("MANIFEST")||bucket>launchLastPackBucket;if(notable){launchLastPackBucket=Math.max(launchLastPackBucket,bucket);appendLaunchTrace((progress.line().contains("[FAIL]")?"[FAIL] ":progress.line().contains("[GET]")?"[GET] ":"[OK] ")+l("PAKET DENETİMİ ","PACK AUDIT ")+percent+"%");}launchStatus=l("PAKET DOĞRULANIYOR","VERIFYING PACKAGE")+" / "+percent+"%";launchTargetProgress=Math.max(launchTargetProgress,.20+progress.value()*.43);repaint();});}
         private void onMinecraftLaunchSignal(String line){LauncherLog.write(line);SwingUtilities.invokeLater(()->{packStatus=line;packLog.add(line);if(packLog.size()>80)packLog.remove(0);double next=launchTargetProgress;String prefix="[EXEC] ";if(line.startsWith("AWAITING")){next=Math.max(next,.90);prefix="[WAIT] ";}else if(line.startsWith("PROCESS STARTED")){next=Math.max(next,.87);try{launchPid=Long.parseLong(line.replaceAll(".*PID\\s+","").strip());}catch(Exception ignored){}}else if(line.startsWith("MODLAUNCHER"))next=Math.max(next,.91);else if(line.startsWith("NEOFORGE"))next=Math.max(next,.925);else if(line.startsWith("ACCOUNT SESSION"))next=Math.max(next,.94);else if(line.startsWith("RENDER BACKEND"))next=Math.max(next,.955);else if(line.startsWith("RESOURCE BUS"))next=Math.max(next,.97);else if(line.startsWith("AUDIO BUS")||line.startsWith("TEXTURE ATLAS"))next=Math.max(next,.985);else if(line.startsWith("MINECRAFT READY")||line.startsWith("MINECRAFT PROCESS STABLE")){next=1;prefix="[OK] ";}launchTargetProgress=next;launchStatus=line;appendLaunchTrace(prefix+line);repaint();});}
 
+        /** Click/Esc/Space jumps to the end of the decorative boot; the real launch work starts right after it either way. */
+        private void skipBoot(){String[] logs=launcherBootMode?LAUNCHER_BOOT_LOGS:BOOT_LOGS;bootStepIndex=BOOT_STEPS.length-1;bootLogCount=logs.length;bootHold=Math.max(bootHold,(launcherBootMode?58:105)-6);repaint();}
+        private void dismissLaunchFailure(){launchOverlayActive=false;launchFailed=false;gameLaunching=false;launchDismissBounds.setBounds(0,0,0,0);launchLogsBounds.setBounds(0,0,0,0);repaint();}
+        private boolean confirmed(String action){if(pendingConfirm.equals(action)){pendingConfirm="";pendingConfirmUntil=0;return true;}pendingConfirm=action;pendingConfirmUntil=time+4;playUiSound(70);repaint();return false;}
         private void startBoot(){pendingGameLaunch=true;launcherBootMode=false;beginBoot();}
         private void startLauncherBoot(){launcherBootMode=true;launcherReady=false;video.setUiGate(false);beginBoot();}
         private void beginBoot(){bootActive=true;bootCompleteSound=false;bootStepIndex=0;bootLogCount=1;bootDelay=10;bootHold=0;playBootSound(0);}
@@ -810,44 +839,26 @@ public final class ErdvynLauncher {
 
         @Override public void actionPerformed(ActionEvent e) {
             time += .016; playPulse += .045; pageTransition=Math.min(1,pageTransition+.075);opening=Math.min(1,opening+.032);
-            double sideTarget=mouse.x<235?1:0;sidebarExpand+=(sideTarget-sidebarExpand)*.13;volumeReveal+=(sidebarExpand-volumeReveal)*.16;pressDepth+=(pressedControl.isEmpty()? -pressDepth:1-pressDepth)*.24;
-            boolean[] values={autoUpdate,autoConnect,gameOptions.fullscreen()};for(int i=0;i<toggleVisual.length;i++)toggleVisual[i]+=(values[i]?1-toggleVisual[i]:-toggleVisual[i])*.18;
-            for (Dust p : dust) {
-                double sway = Math.sin(time * (.72 + p.speed) + p.phase);
-                p.x += p.speed * .00026 + sway * .000075;
-                p.y += p.speed * .00018 + Math.cos(time * .55 + p.phase) * .000018;
-                p.angle = .55 + sway * .72 + Math.sin(time * .31 + p.phase) * .18;
-                if (p.x > 1.04 || p.y > 1.04) { p.y = -.04 - random.nextDouble() * .2; p.x = -.06 + random.nextDouble() * .72; }
-            }
-            advanceBoot();if(!uiTest()){pollBackendIfDue();pollLauncherUpdateIfDue();}if(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&time>=nextCameraGlitchAt)triggerCameraGlitch(4.2+random.nextDouble()*.9);double cameraGlitch=cameraGlitchStrength();double glitchPhase=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);if(cameraGlitch>0&&!cameraVideoSwitched&&glitchPhase>=.24){cameraVideoSwitched=true;video.switchToDifferentVideo();}frame.applyVideoJitter(0,0);video.setUiGate(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&cameraGlitch<.035&&video.isReady());advanceUpdate(); displayedProgress += (targetProgress - displayedProgress) * .075;launchDisplayedProgress+=(launchTargetProgress-launchDisplayedProgress)*.085;
+            // Widen only while the pointer is on the sidebar itself (it overlays the page, so content never moves).
+            boolean pointerInWindow=getMousePosition()!=null;double sideTarget=pointerInWindow&&mouse.y>69&&overSidebar(mouse)?1:0;sidebarExpand+=(sideTarget-sidebarExpand)*.13;volumeReveal+=(sidebarExpand-volumeReveal)*.16;pressDepth+=(pressedControl.isEmpty()? -pressDepth:1-pressDepth)*.24;
+            if(pendingConfirmUntil>0&&time>pendingConfirmUntil){pendingConfirm="";pendingConfirmUntil=0;}
+            advanceBoot();if(!uiTest()){pollBackendIfDue();pollLauncherUpdateIfDue();}if(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&time>=nextCameraGlitchAt)triggerCameraGlitch(4.2+random.nextDouble()*.9);double cameraGlitch=cameraGlitchStrength();double glitchPhase=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);if(cameraGlitch>0&&!cameraVideoSwitched&&glitchPhase>=.24){cameraVideoSwitched=true;video.switchToDifferentVideo();}frame.applyVideoJitter(0,0);video.setUiGate(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&cameraGlitch<.035&&video.isReady());video.setPaused(page!=Page.HOME||launchOverlayActive||(frame.getExtendedState()&Frame.ICONIFIED)!=0);launchDisplayedProgress+=(launchTargetProgress-launchDisplayedProgress)*.085;
             repaint();
         }
-
-        private void advanceUpdate() {
-            if (updateStage == UpdateStage.IDLE) { targetProgress = 1; return; }
-            stateTicks++;
-            switch (updateStage) {
-                case CHECKING -> { targetProgress = .12; if (stateTicks > 48) changeStage(UpdateStage.DOWNLOADING); }
-                case DOWNLOADING -> { targetProgress = Math.min(.80, .12 + stateTicks / 145.0 * .68); if (stateTicks > 145) changeStage(UpdateStage.VERIFYING); }
-                case VERIFYING -> { targetProgress = Math.min(.97, .80 + stateTicks / 48.0 * .17); if (stateTicks > 48) changeStage(UpdateStage.READY); }
-                case READY -> { targetProgress = 1; if (stateTicks > 32) changeStage(UpdateStage.LAUNCHING); }
-                case LAUNCHING -> { targetProgress = 1; if (stateTicks > 78) changeStage(UpdateStage.IDLE); }
-                default -> { }
-            }
-        }
-
-        private void changeStage(UpdateStage next) { updateStage = next; stateTicks = 0; if (next == UpdateStage.CHECKING) { displayedProgress = 0; targetProgress = 0; } }
         private void toggleLanguage() { language = language == Language.TR ? Language.EN : Language.TR; preferences.put("language", language.name()); repaint(); }
         private void navigate(Page next){if(next==Page.ADMIN&&(apiClient.current()==null||!apiClient.current().account().admin()))return;if(page!=next){page=next;pageTransition=0;}if(next!=Page.SETTINGS)settingsLanguageBounds.setBounds(0,0,0,0);profileOpen=false;selectedNews=-1;newsComposeOpen=false;repaint();}
 
         @Override public void mouseClicked(MouseEvent e) {
             if (closeBounds.contains(e.getPoint())) { frame.shutdownAndExit(); return; }
             if (minimizeBounds.contains(e.getPoint())) { frame.setState(Frame.ICONIFIED); return; }
-            if(launchOverlayActive&&launchFailed&&launchDismissBounds.contains(e.getPoint())){launchOverlayActive=false;launchFailed=false;gameLaunching=false;launchDismissBounds.setBounds(0,0,0,0);repaint();return;}
-            if(bootActive||launchOverlayActive)return;
+            if(launchOverlayActive&&launchFailed&&launchDismissBounds.contains(e.getPoint())){dismissLaunchFailure();return;}
+            if(launchOverlayActive&&launchFailed&&launchLogsBounds.contains(e.getPoint())){playUiSound(118);openFolderKind("logs");return;}
+            if(bootActive){skipBoot();return;}
+            if(launchOverlayActive)return;
+            if(e.getClickCount()==2&&e.getY()<70&&e.getX()>SIDEBAR&&!languageBounds.contains(e.getPoint())&&!profileBounds.contains(e.getPoint())&&!notificationBounds.contains(e.getPoint())){frame.toggleMaximized();return;}
             if(audioBounds.contains(e.getPoint())){video.toggleMute();playUiSound(105);return;}
             if (languageBounds.contains(e.getPoint())) { playUiSound(128);toggleLanguage(); return; }
-            if(notificationBounds.contains(e.getPoint())){playUiSound(94);notificationsOpen=!notificationsOpen;profileOpen=false;repaint();return;}
+            if(notificationBounds.contains(e.getPoint())){playUiSound(94);notificationsOpen=!notificationsOpen;seenNotifications=notifications.size();profileOpen=false;repaint();return;}
             // The notification bus is a modal overlay. Handle its update action before
             // the navigation buttons that remain geometrically underneath the panel.
             if(notificationsOpen){
@@ -858,14 +869,15 @@ public final class ErdvynLauncher {
             if(selectedNews>=0){if(articleCloseBounds.contains(e.getPoint()))selectedNews=-1;repaint();return;}
             if(newsComposeOpen){if(newsTitleInputBounds.contains(e.getPoint())){newsField=0;requestFocusInWindow();}else if(newsBodyInputBounds.contains(e.getPoint())){newsField=1;requestFocusInWindow();}else if(newsCancelBounds.contains(e.getPoint())){newsComposeOpen=false;newsTitleDraft="";newsBodyDraft="";}else if(newsPublishBounds.contains(e.getPoint()))publishNews();repaint();return;}
             if(profileBounds.contains(e.getPoint())){playUiSound(101);profileOpen=!profileOpen;notificationsOpen=false;repaint();return;}
-            if(profileOpen){if(microsoftBounds.contains(e.getPoint())){beginMicrosoftLogin();return;}if(erdvynAccountBounds.contains(e.getPoint())){beginErdvynLogin();return;}profileOpen=false;repaint();return;}
+            if(profileOpen){if(microsoftBounds.contains(e.getPoint())){if(accountSession!=null&&!accountLoginInProgress)signOut();else beginMicrosoftLogin();return;}if(erdvynAccountBounds.contains(e.getPoint())){beginErdvynLogin();return;}profileOpen=false;repaint();return;}
             for (int i = 0; i < navBounds.length; i++) if (navBounds[i] != null && navBounds[i].contains(e.getPoint())) { playUiSound(92+i*7);navigate(Page.values()[i]); return; }
+            if(overSidebar(e.getPoint()))return; // the widened sidebar covers the page: never click through it
             if (page == Page.HOME && playBounds.contains(e.getPoint())) { requestGameStart(); return; }
             if (page == Page.HOME && instancePathBounds.contains(e.getPoint())) { openModpackFolder(); return; }
             if(updateBounds.contains(e.getPoint())){launchPreparedUpdate();return;}
             if(page==Page.NEWS&&newsComposeBounds.contains(e.getPoint())){newsComposeOpen=true;newsField=0;requestFocusInWindow();repaint();return;}
             if(page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(newsBounds[i].contains(e.getPoint())){selectedNews=newsFirstVisible+i;repaint();return;}
-            if(page==Page.ADMIN){if(adminTargetBounds.contains(e.getPoint())){adminField=0;requestFocusInWindow();return;}if(adminCommandBounds.contains(e.getPoint())){adminField=1;requestFocusInWindow();return;}if(adminGrantBounds.contains(e.getPoint())){adminAccessChange(true);return;}if(adminRevokeBounds.contains(e.getPoint())){adminAccessChange(false);return;}if(adminBanBounds.contains(e.getPoint())){queueAdminCommand("ban "+adminTargetDraft.strip());return;}if(adminUnbanBounds.contains(e.getPoint())){queueAdminCommand("pardon "+adminTargetDraft.strip());return;}if(adminExecuteBounds.contains(e.getPoint())){queueAdminCommand(adminCommandDraft);return;}}
+            if(page==Page.ADMIN){if(adminTargetBounds.contains(e.getPoint())){adminField=0;requestFocusInWindow();return;}if(adminCommandBounds.contains(e.getPoint())){adminField=1;requestFocusInWindow();return;}if(adminGrantBounds.contains(e.getPoint())){adminAccessChange(true);return;}if(adminRevokeBounds.contains(e.getPoint())){if(confirmed("revoke"))adminAccessChange(false);return;}if(adminBanBounds.contains(e.getPoint())){if(confirmed("ban"))queueAdminCommand("ban "+adminTargetDraft.strip());return;}if(adminUnbanBounds.contains(e.getPoint())){queueAdminCommand("pardon "+adminTargetDraft.strip());return;}if(adminExecuteBounds.contains(e.getPoint())){queueAdminCommand(adminCommandDraft);return;}}
             if(page==Page.PACK&&(installPackBounds.contains(e.getPoint())||verifyBounds.contains(e.getPoint()))){playUiSound(88);verifyModpack();return;}
             if(page==Page.PACK&&folderBounds.contains(e.getPoint())){playUiSound(118);openModpackFolder();return;}
             if(page==Page.GAME&&chatInputBounds.contains(e.getPoint())){chatFocused=true;requestFocusInWindow();repaint();return;}
@@ -888,11 +900,12 @@ public final class ErdvynLauncher {
         @Override public void mouseMoved(MouseEvent e) {
             mouse = e.getPoint(); hoverNav = -1;if(launchOverlayActive){setCursor(Cursor.getPredefinedCursor(launchFailed&&launchDismissBounds.contains(mouse)?Cursor.HAND_CURSOR:Cursor.DEFAULT_CURSOR));repaint();return;}
             for (int i = 0; i < navBounds.length; i++) if (navBounds[i] != null && navBounds[i].contains(mouse)) hoverNav = i;
-            hoverPlay = page == Page.HOME && playBounds.contains(mouse); hoverLanguage = languageBounds.contains(mouse);
-            hoverAudio=audioBounds.contains(mouse);hoverVerify=page==Page.PACK&&verifyBounds.contains(mouse);hoverFolder=page==Page.PACK&&folderBounds.contains(mouse);hoverSetting=-1;
+            boolean content=!overSidebar(mouse); // page controls under the widened sidebar are covered
+            hoverPlay = content && page == Page.HOME && playBounds.contains(mouse); hoverLanguage = languageBounds.contains(mouse);
+            hoverAudio=audioBounds.contains(mouse);hoverVerify=content&&page==Page.PACK&&verifyBounds.contains(mouse);hoverFolder=content&&page==Page.PACK&&folderBounds.contains(mouse);hoverSetting=-1;
             hoverUpdate=notificationsOpen&&updateBounds.contains(mouse);hoverProfile=profileBounds.contains(mouse);hoverNews=-1;
-            if(page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(newsBounds[i].contains(mouse))hoverNews=i;
-            if(page==Page.SETTINGS)for(int i=0;i<settingBounds.length;i++)if(settingBounds[i].contains(mouse))hoverSetting=i;
+            if(content&&page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(newsBounds[i].contains(mouse))hoverNews=i;
+            if(content&&page==Page.SETTINGS)for(int i=0;i<settingBounds.length;i++)if(settingBounds[i].contains(mouse))hoverSetting=i;
             int edge=edgeMask(mouse);if(edge!=0){setCursor(Cursor.getPredefinedCursor(cursorFor(edge)));repaint();return;}
             boolean settingsAction=page==Page.SETTINGS&&(vsyncBounds.contains(mouse)||ramMinusBounds.contains(mouse)||ramPlusBounds.contains(mouse)||renderMinusBounds.contains(mouse)||renderPlusBounds.contains(mouse)||simulationMinusBounds.contains(mouse)||simulationPlusBounds.contains(mouse)||fpsMinusBounds.contains(mouse)||fpsPlusBounds.contains(mouse)||guiMinusBounds.contains(mouse)||guiPlusBounds.contains(mouse)||optionsFileBounds.contains(mouse)||configFolderBounds.contains(mouse)||Arrays.stream(settingsFolderBounds).anyMatch(bounds->bounds.contains(mouse)));
             boolean newsAction=page==Page.NEWS&&(newsComposeBounds.contains(mouse)||newsComposeOpen&&(newsTitleInputBounds.contains(mouse)||newsBodyInputBounds.contains(mouse)||newsPublishBounds.contains(mouse)||newsCancelBounds.contains(mouse)));
@@ -915,9 +928,9 @@ public final class ErdvynLauncher {
             if(volumeDragging){setVideoVolumeFromMouse(e.getX());return;}
             if(windowActionStart==null||windowStartBounds==null)return;Point now=e.getLocationOnScreen();int dx=now.x-windowActionStart.x,dy=now.y-windowActionStart.y;
             if(draggingWindow){frame.setLocation(windowStartBounds.x+dx,windowStartBounds.y+dy);return;}
-            if(!resizingWindow)return;int x=windowStartBounds.x,y=windowStartBounds.y,w=windowStartBounds.width,h=windowStartBounds.height,minW=1120,minH=700;
+            if(!resizingWindow)return;int x=windowStartBounds.x,y=windowStartBounds.y,w=windowStartBounds.width,h=windowStartBounds.height,minW=frame.getMinimumSize().width,minH=frame.getMinimumSize().height;
             if((resizeMask&1)!=0){x+=dx;w-=dx;}if((resizeMask&2)!=0)w+=dx;if((resizeMask&4)!=0){y+=dy;h-=dy;}if((resizeMask&8)!=0)h+=dy;
-            minW=1040;minH=640;if(w<minW){if((resizeMask&1)!=0)x-=minW-w;w=minW;}if(h<minH){if((resizeMask&4)!=0)y-=minH-h;h=minH;}frame.setBounds(x,y,w,h);
+            if(w<minW){if((resizeMask&1)!=0)x-=minW-w;w=minW;}if(h<minH){if((resizeMask&4)!=0)y-=minH-h;h=minH;}frame.setBounds(x,y,w,h);
         }
 
         @Override public void mouseWheelMoved(MouseWheelEvent e){if(page==Page.MAP&&localSurvey.wheel(e.getPoint(),e.getPreciseWheelRotation())){repaint();return;}if(audioBounds.contains(e.getPoint())||volumeBounds.contains(e.getPoint())){video.setVolume(video.volume()-e.getPreciseWheelRotation()*.06);repaint();return;}if(page==Page.NEWS&&!newsComposeOpen){int visible=Math.max(1,(getHeight()-314)/46),max=Math.max(0,(newsPosts.size()-visible)*46);newsScroll=Math.max(0,Math.min(max,newsScroll+e.getWheelRotation()*46));repaint();}}
@@ -925,8 +938,23 @@ public final class ErdvynLauncher {
         private String controlAt(Point point){if(playBounds.contains(point))return"play";if(instancePathBounds.contains(point))return"instance";if(audioBounds.contains(point))return"audio";if(notificationBounds.contains(point))return"notification";if(profileBounds.contains(point))return"profile";if(installPackBounds.contains(point))return"install";if(verifyBounds.contains(point))return"verify";if(folderBounds.contains(point))return"folder";if(chatSendBounds.contains(point))return"send";for(int i=0;i<navBounds.length;i++)if(navBounds[i]!=null&&navBounds[i].contains(point))return"nav"+i;for(int i=0;i<settingBounds.length;i++)if(settingBounds[i].contains(point))return"setting"+i;return"";}
 
         @Override public void keyTyped(KeyEvent e){char c=e.getKeyChar();if(c<32||c==127)return;if(page==Page.ADMIN){if(adminField==0&&adminTargetDraft.length()<36)adminTargetDraft+=c;else if(adminField==1&&adminCommandDraft.length()<180)adminCommandDraft+=c;repaint();return;}if(newsComposeOpen){if(newsField==0&&newsTitleDraft.length()<100)newsTitleDraft+=c;else if(newsField==1&&newsBodyDraft.length()<5000)newsBodyDraft+=c;repaint();return;}if(!chatFocused||page!=Page.GAME)return;if(chatDraft.length()<180){chatDraft+=c;repaint();}}
-        @Override public void keyPressed(KeyEvent e){if(page==Page.ADMIN){if(e.getKeyCode()==KeyEvent.VK_TAB)adminField=1-adminField;else if(e.getKeyCode()==KeyEvent.VK_ENTER&&adminField==1)queueAdminCommand(adminCommandDraft);else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(adminField==0&&!adminTargetDraft.isEmpty())adminTargetDraft=adminTargetDraft.substring(0,adminTargetDraft.length()-1);else if(adminField==1&&!adminCommandDraft.isEmpty())adminCommandDraft=adminCommandDraft.substring(0,adminCommandDraft.length()-1);}repaint();return;}if(newsComposeOpen){if(e.getKeyCode()==KeyEvent.VK_ESCAPE){newsComposeOpen=false;}else if(e.getKeyCode()==KeyEvent.VK_TAB||e.getKeyCode()==KeyEvent.VK_ENTER){newsField=1-newsField;}else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(newsField==0&&!newsTitleDraft.isEmpty())newsTitleDraft=newsTitleDraft.substring(0,newsTitleDraft.length()-1);else if(newsField==1&&!newsBodyDraft.isEmpty())newsBodyDraft=newsBodyDraft.substring(0,newsBodyDraft.length()-1);}repaint();return;}if(!chatFocused||page!=Page.GAME)return;if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE&&!chatDraft.isEmpty()){chatDraft=chatDraft.substring(0,chatDraft.length()-1);repaint();}else if(e.getKeyCode()==KeyEvent.VK_ENTER)sendChat();else if(e.getKeyCode()==KeyEvent.VK_ESCAPE){chatFocused=false;repaint();}}
+        @Override public void keyPressed(KeyEvent e){
+            int key=e.getKeyCode();
+            if(bootActive&&(key==KeyEvent.VK_ESCAPE||key==KeyEvent.VK_SPACE||key==KeyEvent.VK_ENTER)){skipBoot();return;}
+            if(key==KeyEvent.VK_V&&(e.isControlDown()||e.isMetaDown())){pasteClipboard();return;}
+            if(key==KeyEvent.VK_ESCAPE&&closeTopOverlay())return;
+            if(page==Page.ADMIN){if(e.getKeyCode()==KeyEvent.VK_TAB)adminField=1-adminField;else if(e.getKeyCode()==KeyEvent.VK_ENTER&&adminField==1)queueAdminCommand(adminCommandDraft);else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(adminField==0&&!adminTargetDraft.isEmpty())adminTargetDraft=adminTargetDraft.substring(0,adminTargetDraft.length()-1);else if(adminField==1&&!adminCommandDraft.isEmpty())adminCommandDraft=adminCommandDraft.substring(0,adminCommandDraft.length()-1);}repaint();return;}if(newsComposeOpen){if(e.getKeyCode()==KeyEvent.VK_ESCAPE){newsComposeOpen=false;}else if(e.getKeyCode()==KeyEvent.VK_TAB||e.getKeyCode()==KeyEvent.VK_ENTER){newsField=1-newsField;}else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(newsField==0&&!newsTitleDraft.isEmpty())newsTitleDraft=newsTitleDraft.substring(0,newsTitleDraft.length()-1);else if(newsField==1&&!newsBodyDraft.isEmpty())newsBodyDraft=newsBodyDraft.substring(0,newsBodyDraft.length()-1);}repaint();return;}if(!chatFocused||page!=Page.GAME)return;if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE&&!chatDraft.isEmpty()){chatDraft=chatDraft.substring(0,chatDraft.length()-1);repaint();}else if(e.getKeyCode()==KeyEvent.VK_ENTER)sendChat();else if(e.getKeyCode()==KeyEvent.VK_ESCAPE){chatFocused=false;repaint();}}
         @Override public void keyReleased(KeyEvent e){}
+        private boolean closeTopOverlay(){
+            if(launchOverlayActive&&launchFailed)dismissLaunchFailure();else if(selectedNews>=0)selectedNews=-1;else if(notificationsOpen)notificationsOpen=false;else if(profileOpen)profileOpen=false;else return false;
+            repaint();return true;
+        }
+        /** Paste goes through keyTyped, so the focused field's length limits and control-character filter still apply. */
+        private void pasteClipboard(){
+            try{Object data=Toolkit.getDefaultToolkit().getSystemClipboard().getData(java.awt.datatransfer.DataFlavor.stringFlavor);if(!(data instanceof String text))return;
+                for(char c:text.substring(0,Math.min(500,text.length())).toCharArray())keyTyped(new KeyEvent(this,KeyEvent.KEY_TYPED,System.currentTimeMillis(),0,KeyEvent.VK_UNDEFINED,c));
+            }catch(Exception ignored){}
+        }
 
         private void authenticateCachedAccount(){
             if(accountSession==null||backendPollInProgress)return;backendPollInProgress=true;
@@ -981,14 +1009,14 @@ public final class ErdvynLauncher {
                 setLaunchStage(l("MINECRAFT ÇALIŞMA ORTAMI DENETLENİYOR","CHECKING MINECRAFT RUNTIME"),.08,"[EXEC] "+l("JAVA 21 VE NEOFORGE ARANIYOR","PROBING JAVA 21 AND NEOFORGE"));
                 packStatus=l("MINECRAFT ÇALIŞMA ORTAMI DENETLENİYOR","CHECKING MINECRAFT RUNTIME");
                 installService.ensureInstalled(line->{LauncherLog.write(line);setLaunchStage(l("ÇALIŞMA ORTAMI HAZIRLANIYOR","PREPARING RUNTIME"),.16,"[OK] "+line);SwingUtilities.invokeLater(()->{packLog.add(line);if(packLog.size()>80)packLog.remove(0);repaint();});});
-                setLaunchStage(l("UZAK PAKET MANİFESTİ DENETLENİYOR","CHECKING REMOTE PACK MANIFEST"),.20,"[EXEC] "+l("SUNUCU PAKET İMZASI İSTENDİ","SERVER PACK SIGNATURE REQUESTED"));
-                packVerifying=true;packProgress=0;packLog.clear();packStatus=l("UZAK PAKET MANİFESTİ DENETLENİYOR","CHECKING REMOTE PACK MANIFEST");
+                setLaunchStage(l("UZAK PAKET MANİFESTİ DENETLENİYOR","CHECKING REMOTE PACK MANIFEST"),.20,"[EXEC] "+l("SUNUCU PAKET MANİFESTİ İSTENDİ","SERVER PACK MANIFEST REQUESTED"));
+                String checking=l("UZAK PAKET MANİFESTİ DENETLENİYOR","CHECKING REMOTE PACK MANIFEST");SwingUtilities.invokeLater(()->{packVerifying=true;packProgress=0;packLog.clear();packStatus=checking;});
                 PackService.Result verifiedPack=packService.verifyAndRepair(this::onPackLaunchProgress);
-                packVerifying=false;if(verifiedPack.failed()>0)throw new IllegalStateException(l("Mod paketi doğrulanamadı; oyun başlatılmadı.","Modpack verification failed; launch was blocked."));packInstalled=true;
+                SwingUtilities.invokeLater(()->packVerifying=false);if(verifiedPack.failed()>0)throw new IllegalStateException(l("Mod paketi doğrulanamadı; oyun başlatılmadı.","Modpack verification failed; launch was blocked."));packInstalled=true;
                 LauncherLog.write("Pack verified version="+verifiedPack.version()+" downloaded="+verifiedPack.downloaded());
-                setLaunchStage(l("PAKET İMZASI DOĞRULANDI","PACKAGE SIGNATURE VERIFIED"),.66,"[OK] "+verifiedPack.version()+" / "+verifiedPack.downloaded()+" "+l("DOSYA ALINDI","FILES FETCHED"));
+                setLaunchStage(l("PAKET SHA-256 İLE DOĞRULANDI","PACKAGE VERIFIED BY SHA-256"),.66,"[OK] "+verifiedPack.version()+" / "+verifiedPack.downloaded()+" "+l("DOSYA ALINDI","FILES FETCHED"));
                 setLaunchStage(l("MICROSOFT OTURUMU YENİLENİYOR","REFRESHING MICROSOFT SESSION"),.70,"[EXEC] "+l("HESAP BİLETİ DOĞRULANIYOR","VALIDATING ACCOUNT TOKEN"));MicrosoftAccountService.Session fresh=accountService.refresh();if(fresh==null)throw new IllegalStateException(l("Microsoft hesabı bağlı değil.","Microsoft account is not linked."));accountSession=fresh;String ticket=null;
-                setLaunchStage(l("ERDVYN OTURUM BİLETİ HAZIRLANIYOR","PREPARING ERDVYN SESSION TICKET"),.74,"[EXEC] "+l("GÜVENLİ BAĞLANTI BİLETİ İSTENDİ","SECURE LINK TICKET REQUESTED"));if(apiClient.configured()){if(apiClient.current()==null)apiClient.authenticate(fresh);String ws=apiClient.webSocketUrl();if(ws!=null)hub.connect(ws);ticket=apiClient.createGameTicket(PackService.activeManifestSha256());}
+                setLaunchStage(l("ERDVYN OTURUM BİLETİ HAZIRLANIYOR","PREPARING ERDVYN SESSION TICKET"),.74,"[EXEC] "+l("GÜVENLİ BAĞLANTI BİLETİ İSTENDİ","SECURE LINK TICKET REQUESTED"));if(apiClient.configured()){if(!ErdvynApiClient.sameAccount(apiClient.current(),fresh))apiClient.authenticate(fresh);String ws=apiClient.webSocketUrl();if(ws!=null)hub.connect(ws);String manifestSha=PackService.activeManifestSha256();try{ticket=apiClient.createGameTicket(manifestSha);}catch(Exception expired){/* stored Erdvyn token expired or revoked: sign in once more, then retry */apiClient.authenticate(fresh);ticket=apiClient.createGameTicket(manifestSha);}}
                 setLaunchStage(l("JVM BAŞLATILIYOR","STARTING JVM"),.80,"[EXEC] JVM / XMX "+gameOptions.ramGb()+"G / NEOFORGE 21.1.243");packStatus=l("JVM BAŞLATILIYOR","STARTING JVM");LauncherLog.write("Starting JVM as "+fresh.name());
                 Process minecraft=launchService.launch(fresh,gameOptions.ramGb(),autoConnect,ticket,this::onMinecraftLaunchSignal);launchPid=minecraft.pid();setLaunchStage(l("MINECRAFT BEKLENİYOR","AWAITING MINECRAFT"),.88,"[WAIT] "+l("RENDER PENCERESİNDEN HAZIR SİNYALİ BEKLENİYOR","AWAITING READY SIGNAL FROM RENDER WINDOW"));
                 launchService.awaitReady(minecraft,this::onMinecraftLaunchSignal);
@@ -1001,6 +1029,8 @@ public final class ErdvynLauncher {
             if(accountLoginInProgress)return;playUiSound(82);accountLoginInProgress=true;accountNotice=l("MICROSOFT GİRİŞİ HAZIRLANIYOR...","PREPARING MICROSOFT SIGN-IN...");repaint();
             Thread.startVirtualThread(()->{try{MicrosoftAccountService.Session session=accountService.login(code->{try{Desktop.getDesktop().browse(URI.create(code.getDirectVerificationUri()));}catch(Exception ignored){}SwingUtilities.invokeLater(()->{accountNotice=l("KOD: ","CODE: ")+code.getUserCode()+" / "+l("TARAYICIDA ONAYLA","CONFIRM IN BROWSER");repaint();});});accountSession=session;loadPlayerHead(session);boolean erdvynLinked=false;String backendFailure="";if(apiClient.configured()){try{apiClient.authenticate(session);String ws=apiClient.webSocketUrl();if(ws!=null)hub.connect(ws);erdvynLinked=true;}catch(Exception backendError){backendFailure=shortError(backendError);}}boolean linked=erdvynLinked;String backendMessage=backendFailure;SwingUtilities.invokeLater(()->{accountLoginInProgress=false;accountNotice=linked?l("ERDVYN HESABI UUID İLE BAĞLANDI","ERDVYN ACCOUNT LINKED TO UUID"):backendMessage.isBlank()?l("MINECRAFT HESABI BAĞLANDI","MINECRAFT ACCOUNT LINKED"):l("MINECRAFT BAĞLI / ERDVYN SERVİSİ: ","MINECRAFT LINKED / ERDVYN SERVICE: ")+backendMessage;notifications.add(l("Minecraft hesabı bağlandı: ","Minecraft account linked: ")+session.name());profileOpen=false;if(launchAfterLogin){launchAfterLogin=false;if(!apiClient.configured()||linked)startBoot();}repaint();});}catch(Exception ex){SwingUtilities.invokeLater(()->{accountLoginInProgress=false;launchAfterLogin=false;accountNotice=l("GİRİŞ HATASI: ","SIGN-IN ERROR: ")+loginError(ex);notifications.add(accountNotice);repaint();});}});
         }
+        /** Forgets the DPAPI-stored Microsoft tokens and the Erdvyn session; the next PLAY asks for a sign-in again. */
+        private void signOut(){playUiSound(90);accountService.logout();apiClient.signOut();hub.close();accountSession=null;playerHead=null;profileOpen=false;accountNotice=l("ÇIKIŞ YAPILDI","SIGNED OUT");if(page==Page.ADMIN)navigate(Page.HOME);repaint();}
         private void beginErdvynLogin(){openAccountPage("/login?source=launcher",96,l("Güvenli hesap ekranı açıldı.","Secure account page opened."));}
         private void openAccountPage(String path,double sound,String success){playUiSound(sound);String accountUrl=LauncherConfig.accountUrl();if(accountUrl.isBlank()){accountNotice=l("Erdvyn hesap sunucusu adresi gerekli.","Erdvyn account server URL required.");repaint();return;}try{Desktop.getDesktop().browse(URI.create(accountUrl.replaceAll("/+$","")+path));accountNotice=success;}catch(Exception ex){accountNotice=ex.getMessage();}repaint();}
 
@@ -1030,9 +1060,12 @@ public final class ErdvynLauncher {
         private static String shortError(Throwable error){Throwable current=error;while(current.getCause()!=null&&current.getCause()!=current)current=current.getCause();String text=current.getMessage();if(text==null||text.isBlank())text=current.getClass().getSimpleName();return text.length()>110?text.substring(0,107)+"...":text;}
         private String loginError(Throwable error){String raw=shortError(error),lower=raw.toLowerCase(Locale.ROOT);if(lower.contains("does not own minecraft")||lower.contains("no java profile")||lower.contains("entitlement")||lower.contains("minecraft profile"))return l("Microsoft girişi tamamlandı fakat bu hesap Minecraft: Java Edition sahibi değil veya Java profili oluşturulmamış.","Microsoft sign-in completed, but this account does not own Minecraft: Java Edition or has no Java profile.");return raw;}
         private void loadPlayerHead(MicrosoftAccountService.Session session){try{BufferedImage loaded=skinService.head(session);if(loaded!=null)SwingUtilities.invokeLater(()->{playerHead=loaded;repaint();});}catch(Exception ignored){}}
-        private void pollLauncherUpdateIfDue(){long now=System.currentTimeMillis();if(launcherInstaller==null&&!launcherUpdateCheckInProgress&&now-lastLauncherUpdateCheckMillis>=300_000L)checkLauncherUpdateAsync();}
+        private void pollLauncherUpdateIfDue(){long now=System.currentTimeMillis();if(autoUpdate&&launcherInstaller==null&&!launcherUpdateCheckInProgress&&now-lastLauncherUpdateCheckMillis>=300_000L)checkLauncherUpdateAsync();}
         private void checkLauncherUpdateAsync(){if(launcherUpdateCheckInProgress||LauncherConfig.launcherGithubRepository().isBlank()&&LauncherConfig.launcherManifestUrl().isBlank())return;launcherUpdateCheckInProgress=true;lastLauncherUpdateCheckMillis=System.currentTimeMillis();Thread.startVirtualThread(()->{try{LauncherUpdateService.Update found=launcherUpdateService.check();if(found==null)return;Path downloaded=launcherUpdateService.download(found);SwingUtilities.invokeLater(()->{launcherUpdate=found;launcherInstaller=downloaded;lastLauncherUpdateError="";notifications.add(String.format(Locale.ROOT,l("Launcher %s GitHub'dan indirildi. Bildirim panelinden kurabilirsin.","Launcher %s was downloaded from GitHub. Install it from notifications."),found.version()));repaint();});}catch(Exception ex){String error=shortError(ex);SwingUtilities.invokeLater(()->{if(!error.equals(lastLauncherUpdateError)){lastLauncherUpdateError=error;notifications.add(l("Launcher güncellemesi denetlenemedi: ","Launcher update check failed: ")+error);}repaint();});}finally{launcherUpdateCheckInProgress=false;}});}
-        private void launchPreparedUpdate(){if(launcherInstaller==null||!Files.isRegularFile(launcherInstaller))return;try{Desktop.getDesktop().open(launcherInstaller.toFile());frame.shutdownAndExit();}catch(Exception ex){accountNotice=l("GÜNCELLEME HATASI: ","UPDATE ERROR: ")+shortError(ex);repaint();}}
+        private void launchPreparedUpdate(){if(launcherInstaller==null||launcherUpdate==null||!Files.isRegularFile(launcherInstaller))return;try{
+                // Re-hash right before running: the cached installer sits in a user-writable folder for minutes or days.
+                if(!launcherUpdate.sha256().equalsIgnoreCase(PackService.sha256(launcherInstaller))){Files.deleteIfExists(launcherInstaller);launcherInstaller=null;throw new java.io.IOException(l("Güncelleme dosyası değişmiş; yeniden indirilecek.","Update file changed on disk; it will be downloaded again."));}
+                Desktop.getDesktop().open(launcherInstaller.toFile());frame.shutdownAndExit();}catch(Exception ex){accountNotice=l("GÜNCELLEME HATASI: ","UPDATE ERROR: ")+shortError(ex);repaint();}}
         private void sendChat(){String message=chatDraft.strip();if(message.isEmpty())return;playUiSound(112);if(hub.connected())hub.sendChat(message);else chatLines.add(ChatLine.system("SYSTEM",l("Sohbet sunucusuna bağlı değilsin.","Not connected to the chat server."),LocalTime.now()));chatDraft="";repaint();}
 
         void shutdown(){timer.stop();hub.close();serverStatus.close();video.setUiGate(false);}
@@ -1081,10 +1114,6 @@ public final class ErdvynLauncher {
 
         private MouseEvent testEvent(int id,int x,int y,int xAbs,int yAbs){return new MouseEvent(this,id,System.currentTimeMillis(),0,x,y,xAbs,yAbs,1,false,MouseEvent.BUTTON1);}
 
-        static final class Dust {
-            double x, y, speed, phase, angle; int size;
-            Dust(double x, double y, double speed, int size, double phase) { this.x = x; this.y = y; this.speed = speed; this.size = size; this.phase = phase; }
-        }
         record ChatLine(String author,String message,LocalTime time,boolean owned){
             ChatLine(String author,String message,LocalTime time){this(author,message,time,false);}
             static ChatLine system(String author,String message,LocalTime time){return new ChatLine(author,message,time,true);}
@@ -1093,19 +1122,25 @@ public final class ErdvynLauncher {
 
     record HubEvent(String kind,String author,String value){}
     static final class HubClient implements WebSocket.Listener {
-        private final Consumer<HubEvent> events;private final StringBuilder incoming=new StringBuilder();private volatile WebSocket socket;private volatile boolean connected;
+        private static final com.fasterxml.jackson.databind.ObjectMapper JSON=new com.fasterxml.jackson.databind.ObjectMapper();
+        private final HttpClient http=HttpClient.newHttpClient();
+        private final Consumer<HubEvent> events;private final StringBuilder incoming=new StringBuilder();private volatile WebSocket socket;private volatile boolean connected,connecting;
         HubClient(Consumer<HubEvent> events){this.events=events;}
         boolean connected(){return connected;}
         void connect(){String endpoint=System.getenv("ERDVYN_HUB_WS");if(endpoint==null||endpoint.isBlank())return;connect(endpoint);}
-        synchronized void connect(String endpoint){if(endpoint==null||endpoint.isBlank()||connected)return;try{var builder=HttpClient.newHttpClient().newWebSocketBuilder();String token=System.getenv("ERDVYN_HUB_TOKEN");if(token!=null&&!token.isBlank()&&!endpoint.contains("token="))builder.header("Authorization","Bearer "+token);builder.buildAsync(URI.create(endpoint),this).exceptionally(error->{events.accept(new HubEvent("status","SYSTEM","Hub: "+error.getMessage()));return null;});}catch(Exception ex){events.accept(new HubEvent("status","SYSTEM","Hub: "+ex.getMessage()));}}
-        void sendChat(String message){WebSocket active=socket;if(active!=null&&connected)active.sendText("{\"type\":\"chat\",\"message\":\""+escape(message)+"\"}",true);}
-        void close(){WebSocket active=socket;socket=null;connected=false;if(active!=null)try{active.sendClose(WebSocket.NORMAL_CLOSURE,"Launcher closed");}catch(Exception ignored){active.abort();}}
-        @Override public void onOpen(WebSocket webSocket){socket=webSocket;connected=true;events.accept(new HubEvent("status","SYSTEM","Erdvyn hub connected."));webSocket.request(1);}
+        // Startup refresh, login and launch can all call this: one socket at a time, or chat lines arrive twice.
+        synchronized void connect(String endpoint){if(endpoint==null||endpoint.isBlank()||connected||connecting)return;connecting=true;try{var builder=http.newWebSocketBuilder();String token=System.getenv("ERDVYN_HUB_TOKEN");if(token!=null&&!token.isBlank()&&!endpoint.contains("token="))builder.header("Authorization","Bearer "+token);builder.buildAsync(URI.create(endpoint),this).exceptionally(error->{connecting=false;events.accept(new HubEvent("status","SYSTEM","Hub: "+error.getMessage()));return null;});}catch(Exception ex){connecting=false;events.accept(new HubEvent("status","SYSTEM","Hub: "+ex.getMessage()));}}
+        void sendChat(String message){WebSocket active=socket;if(active!=null&&connected)active.sendText(JSON.createObjectNode().put("type","chat").put("message",message).toString(),true);}
+        void close(){WebSocket active=socket;socket=null;connected=false;connecting=false;if(active!=null)try{active.sendClose(WebSocket.NORMAL_CLOSURE,"Launcher closed");}catch(Exception ignored){active.abort();}}
+        @Override public void onOpen(WebSocket webSocket){socket=webSocket;connected=true;connecting=false;events.accept(new HubEvent("status","SYSTEM","Erdvyn hub connected."));webSocket.request(1);}
         @Override public CompletionStage<?> onText(WebSocket webSocket,CharSequence data,boolean last){incoming.append(data);if(last){String raw=incoming.toString();incoming.setLength(0);parse(raw);}webSocket.request(1);return null;}
-        @Override public CompletionStage<?> onClose(WebSocket webSocket,int statusCode,String reason){connected=false;events.accept(new HubEvent("status","SYSTEM","Hub disconnected."));return WebSocket.Listener.super.onClose(webSocket,statusCode,reason);}
-        @Override public void onError(WebSocket webSocket,Throwable error){connected=false;events.accept(new HubEvent("status","SYSTEM","Hub: "+error.getMessage()));}
-        private void parse(String raw){String type=json(raw,"type");if("players".equals(type)){events.accept(new HubEvent("players","",json(raw,"players")));return;}if("chat".equals(type))events.accept(new HubEvent("chat",Optional.ofNullable(json(raw,"author")).filter(s->!s.isBlank()).orElse("PLAYER"),json(raw,"message")));}
-        private static String json(String raw,String key){java.util.regex.Matcher array=java.util.regex.Pattern.compile("\\\""+java.util.regex.Pattern.quote(key)+"\\\"\\s*:\\s*\\[(.*?)]").matcher(raw);if(array.find())return Arrays.stream(array.group(1).split(",")).map(s->s.strip().replaceAll("^\\\"|\\\"$","")).reduce((a,b)->a+","+b).orElse("");java.util.regex.Matcher value=java.util.regex.Pattern.compile("\\\""+java.util.regex.Pattern.quote(key)+"\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"").matcher(raw);return value.find()?value.group(1).replace("\\n","\n").replace("\\\"","\""):"";}
-        private static String escape(String text){return text.replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n");}
+        @Override public CompletionStage<?> onClose(WebSocket webSocket,int statusCode,String reason){connected=false;connecting=false;events.accept(new HubEvent("status","SYSTEM","Hub disconnected."));return WebSocket.Listener.super.onClose(webSocket,statusCode,reason);}
+        @Override public void onError(WebSocket webSocket,Throwable error){connected=false;connecting=false;events.accept(new HubEvent("status","SYSTEM","Hub: "+error.getMessage()));}
+        private void parse(String raw){
+            try{var root=JSON.readTree(raw);String type=root.path("type").asText();
+                if("players".equals(type)){List<String> names=new ArrayList<>();root.path("players").forEach(node->names.add(node.asText()));events.accept(new HubEvent("players","",String.join(",",names)));return;}
+                if("chat".equals(type)){String author=root.path("author").asText("");events.accept(new HubEvent("chat",author.isBlank()?"PLAYER":author,root.path("message").asText("")));}
+            }catch(Exception malformed){/* ignore frames that are not JSON */}
+        }
     }
 }

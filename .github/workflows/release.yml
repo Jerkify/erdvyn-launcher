@@ -5,31 +5,43 @@ on:
     tags:
       - "v*"
 
+# Build with a read-only token; only the publish job may write the release.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      # Actions are pinned to commits: a moved tag cannot swap the code that builds the installer.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
       - name: version
+        id: version
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
+          # The tag is untrusted text: validate it instead of expanding it into the script.
+          if ($env:TAG -notmatch '^v\d+\.\d+\.\d+$') { throw "Unexpected release tag: $env:TAG" }
+          $version = $env:TAG.Substring(1)
           "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
       - name: install Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        run: choco install innosetup --version 6.7.1 --yes --no-progress
       - name: package
         shell: pwsh
         run: .\tools\build-release.ps1 -SkipVideos -Version $env:RELEASE_VERSION
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: erdvyn-launcher-${{ env.RELEASE_VERSION }}
           path: |
@@ -37,13 +49,24 @@ jobs:
             build/dist/Erdvyn-Launcher-Portable-${{ env.RELEASE_VERSION }}.zip
             build/dist/SHA256SUMS.txt
           if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: erdvyn-launcher-${{ needs.build.outputs.version }}
+          path: dist
       - name: publish
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          gh release create "${{ github.ref_name }}" `
-            "build/dist/Erdvyn-Launcher-Setup-$env:RELEASE_VERSION.exe" `
-            "build/dist/Erdvyn-Launcher-Portable-$env:RELEASE_VERSION.zip" `
-            "build/dist/SHA256SUMS.txt" `
-            --generate-notes
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            "dist/Erdvyn-Launcher-Setup-$VERSION.exe" \
+            "dist/Erdvyn-Launcher-Portable-$VERSION.zip" \
+            "dist/SHA256SUMS.txt"
