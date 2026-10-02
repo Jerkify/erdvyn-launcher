@@ -1,6 +1,7 @@
 param(
     [switch]$SkipVideos,
-    [string]$Version = '2.1.21'
+    [Parameter(Mandatory=$true)][string]$Version,
+    [string]$ReleaseNotes = ''
 )
 $ErrorActionPreference='Stop'
 $projectRoot=(Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -56,7 +57,7 @@ try {
             }
         }
     }
-    & (Join-Path $PSScriptRoot 'build-installer.ps1') -AppImage $appImage -Version $Version
+    & (Join-Path $PSScriptRoot 'build-installer.ps1') -AppImage $appImage -Version $Version -ReleaseNotes $ReleaseNotes
     if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
     Write-Host "RELEASE=$appImage"
 } finally { Pop-Location }
