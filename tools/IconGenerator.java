@@ -49,7 +49,16 @@ public final class IconGenerator {
         BufferedImage output=new BufferedImage(size,size,BufferedImage.TYPE_INT_ARGB);Graphics2D g=output.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_BICUBIC);g.setRenderingHint(RenderingHints.KEY_RENDERING,RenderingHints.VALUE_RENDER_QUALITY);
         g.setComposite(AlphaComposite.Clear);g.fillRect(0,0,size,size);g.setComposite(AlphaComposite.SrcOver);
-        g.drawImage(image,inset,inset,target,target,null);g.dispose();return output;
+        g.drawImage(image,inset,inset,target,target,null);g.dispose();return flatten(output);
+    }
+
+    /** The mark is one flat amber: resampling leaves garbage RGB in near-transparent pixels, so repaint every pixel that colour. */
+    private static BufferedImage flatten(BufferedImage image){
+        long r=0,gr=0,b=0,n=0;
+        for(int y=0;y<image.getHeight();y++)for(int x=0;x<image.getWidth();x++){int argb=image.getRGB(x,y);if((argb>>>24)>240){r+=argb>>16&255;gr+=argb>>8&255;b+=argb&255;n++;}}
+        if(n==0)return image;int rgb=(int)(r/n)<<16|(int)(gr/n)<<8|(int)(b/n);
+        for(int y=0;y<image.getHeight();y++)for(int x=0;x<image.getWidth();x++){int alpha=image.getRGB(x,y)>>>24;image.setRGB(x,y,alpha<8?0:alpha<<24|rgb);}
+        return image;
     }
 
     // ponytail: disc stamp dilation is O(r^2) draws; fine for a 256 px monochrome logo, use a real morphology op for big art.
