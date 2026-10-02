@@ -74,4 +74,23 @@ final class UiMessages {
         return value;
     }
     static String upper(String text,boolean turkish){return text.toUpperCase(turkish?Locale.forLanguageTag("tr-TR"):Locale.ENGLISH);}
+
+    /** What-to-do text {tr,en} for common launch/pack failures, or null. Callers keep the raw error in the trace and LauncherLog. */
+    static String[] hint(Throwable error){
+        StringBuilder text=new StringBuilder();boolean network=false,denied=false;
+        for(Throwable t=error;t!=null;t=t.getCause()==t?null:t.getCause()){
+            text.append(' ').append(t.getMessage());
+            network|=t instanceof java.net.UnknownHostException||t instanceof java.net.SocketException||t instanceof java.net.SocketTimeoutException||t instanceof java.net.http.HttpTimeoutException||t instanceof javax.net.ssl.SSLException||t instanceof java.nio.channels.UnresolvedAddressException;
+            denied|=t instanceof java.nio.file.AccessDeniedException;
+        }
+        String s=text.toString().toLowerCase(Locale.ROOT);
+        if(s.contains("java 21 runtime was not found")||s.contains("java 21 is required"))return new String[]{"Java 21 bulunamadı. Launcher'ı yeniden kur veya 64-bit Java 21 yükle.","Java 21 was not found. Reinstall the launcher or install 64-bit Java 21."};
+        if(s.contains("does not own minecraft")||s.contains("no java profile")||s.contains("entitlement")||s.contains("minecraft profile"))return new String[]{"Bu Microsoft hesabında Minecraft: Java Edition profili yok. minecraft.net'te profil oluştur ya da doğru hesapla gir.","This Microsoft account has no Minecraft: Java Edition profile. Create one at minecraft.net or sign in with the right account."};
+        if(s.contains("not enough space")||s.contains("no space left")||s.contains("disk full")||s.contains("disk is full"))return new String[]{"Diskte yer kalmadı. Biraz yer açıp tekrar dene.","The disk is full. Free up some space and try again."};
+        if(denied||s.contains("access is denied")||s.contains("being used by another process"))return new String[]{"Dosyaya erişilemedi. Açık bir Minecraft varsa kapat; antivirüs klasörü engelliyor olabilir.","A file could not be accessed. Close any running Minecraft; antivirus may be blocking the folder."};
+        if(s.contains("sha-256 mismatch")||s.contains("hash mismatch")||s.contains("checksum mismatch"))return new String[]{"İndirilen dosya doğrulanamadı (SHA-256). Tekrar dene; sürerse yöneticiye bildir.","A downloaded file failed its SHA-256 check. Try again; if it keeps failing, tell an admin."};
+        if(Pattern.compile("http 5\\d\\d").matcher(s).find())return new String[]{"İndirme sunucusu şu an yanıt vermiyor (HTTP 5xx). Birkaç dakika sonra tekrar dene.","The download server is having trouble (HTTP 5xx). Try again in a few minutes."};
+        if(network)return new String[]{"Sunucuya ulaşılamadı. İnternet bağlantını kontrol edip tekrar dene.","Could not reach the server. Check your internet connection and try again."};
+        return null;
+    }
 }

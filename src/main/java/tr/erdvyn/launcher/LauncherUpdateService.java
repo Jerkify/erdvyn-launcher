@@ -26,16 +26,13 @@ final class LauncherUpdateService {
     private static final ObjectMapper JSON = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(12)).followRedirects(HttpClient.Redirect.NORMAL).build();
 
+    /** Ed25519 key that signs SHA256SUMS.txt in the release workflow (secret LAUNCHER_SIGNING_KEY). Private half: .local/secrets. */
+    static final String RELEASE_PUBLIC_KEY="MCowBQYDK2VwAyEAPtfk/1pBhQdKXB7MvvtKp6y9CsMLz0I3KZjuNlQAxhE=";
+
+    // GitHub releases are the only update source: a second, unsigned manifest path would be a second way in.
     Update check() throws Exception {
         String repository=LauncherConfig.launcherGithubRepository();
-        if(repository!=null&&!repository.isBlank()){
-            try{return checkGithub(repository.strip());}
-            catch(Exception githubError){
-                String manifestUrl=LauncherConfig.launcherManifestUrl();
-                if(manifestUrl==null||manifestUrl.isBlank())throw githubError;
-            }
-        }
-        return checkManifest();
+        return repository==null||repository.isBlank()?null:checkGithub(repository.strip());
     }
 
     private Update checkGithub(String repository) throws Exception {
@@ -47,57 +44,55 @@ final class LauncherUpdateService {
         String version=root.path("tag_name").asText(root.path("name").asText("")).strip().replaceFirst("^[vV]","");
         if(version.isBlank())throw new IOException("GitHub release version is missing");
         if(compareVersions(version,CURRENT_VERSION)<=0)return null;
-        JsonNode installer=null,sums=null;
+        JsonNode installer=null,sums=null,signature=null;
         String expected="Erdvyn-Launcher-Setup-"+version+".exe";
         for(JsonNode asset:root.path("assets")){
             String name=asset.path("name").asText();
             // Only the installer named for this tag: a stray older setup.exe in the release must never be offered as the update.
             if(name.equalsIgnoreCase(expected))installer=asset;
             if(name.equalsIgnoreCase("SHA256SUMS.txt"))sums=asset;
+            if(name.equalsIgnoreCase("SHA256SUMS.txt.sig"))signature=asset;
         }
         if(installer==null)throw new IOException("GitHub release installer is missing");
+        if(sums==null||signature==null)throw new IOException("Launcher update "+version+" is not signed");
+        // The installer hash comes only from the signed checksum file; GitHub's own digest is not covered by the signature.
+        byte[] checksums=fetch(sums);
+        if(!signed(checksums,new String(fetch(signature),StandardCharsets.US_ASCII).strip(),releaseKey()))throw new IOException("Launcher update "+version+" has an invalid signature");
         String installerUrl=installer.path("browser_download_url").asText().strip();
-        String installerName=installer.path("name").asText();
-        String digest=installer.path("digest").asText("").strip();
-        String sha=digest.toLowerCase(Locale.ROOT).startsWith("sha256:")?digest.substring(7).strip():"";
-        if(!validSha256(sha)&&sums!=null){
-            String sumsUrl=sums.path("browser_download_url").asText().strip();
-            if(!sumsUrl.isBlank())sha=readChecksum(URI.create(sumsUrl),installerName);
-        }
+        String sha=checksum(new String(checksums,StandardCharsets.UTF_8),installer.path("name").asText());
         if(installerUrl.isBlank()||!validSha256(sha))throw new IOException("GitHub release checksum is missing");
         if(!LauncherConfig.secure(URI.create(installerUrl)))throw new IOException("GitHub release installer URL is not https");
         return new Update(version,URI.create(installerUrl),sha.toLowerCase(Locale.ROOT),root.path("body").asText(""));
     }
 
-    private String readChecksum(URI uri,String installerName) throws Exception {
-        HttpResponse<String> response=http.send(githubRequest(uri,Duration.ofSeconds(20)).GET().build(),HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        if(response.statusCode()/100!=2)throw new IOException("GitHub checksum HTTP "+response.statusCode());
-        for(String line:response.body().split("\\R")){
+    private byte[] fetch(JsonNode asset) throws Exception {
+        URI uri=URI.create(asset.path("browser_download_url").asText().strip());
+        if(!LauncherConfig.secure(uri))throw new IOException("GitHub release asset URL is not https");
+        HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).header("User-Agent","Erdvyn-Launcher/"+CURRENT_VERSION).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
+        if(response.statusCode()/100!=2)throw new IOException("GitHub release asset HTTP "+response.statusCode());
+        if(response.body().length>64*1024)throw new IOException("GitHub release asset is unexpectedly large");
+        return response.body();
+    }
+
+    static String checksum(String sums,String installerName){
+        for(String line:sums.split("\\R")){
             String clean=line.strip();if(clean.isBlank())continue;String[] parts=clean.split("\\s+",2);
             if(parts.length==2&&validSha256(parts[0])&&parts[1].replaceFirst("^[*]","").strip().equalsIgnoreCase(installerName))return parts[0];
         }
         return "";
     }
 
-    private HttpRequest.Builder githubRequest(URI uri,Duration timeout){return HttpRequest.newBuilder(uri).timeout(timeout).header("Accept","application/vnd.github+json").header("X-GitHub-Api-Version","2022-11-28").header("User-Agent","Erdvyn-Launcher/"+CURRENT_VERSION);}
-
-    private Update checkManifest() throws Exception {
-        String manifestUrl = LauncherConfig.launcherManifestUrl();
-        if (manifestUrl == null || manifestUrl.isBlank()) return null;
-        URI manifestUri = URI.create(manifestUrl);
-        HttpResponse<String> response = http.send(HttpRequest.newBuilder(manifestUri).timeout(Duration.ofSeconds(20)).GET().build(), HttpResponse.BodyHandlers.ofString());
-        if (response.statusCode() / 100 != 2) throw new IOException("Launcher manifest HTTP " + response.statusCode());
-        JsonNode root = JSON.readTree(response.body());
-        String version = root.path("version").asText().strip();
-        String url = root.path("installer_url").asText().strip();
-        String sha256 = root.path("sha256").asText().strip().toLowerCase();
-        if (version.isBlank() || url.isBlank() || sha256.length() != 64) throw new IOException("Launcher update manifest is incomplete");
-        if (compareVersions(version, CURRENT_VERSION) <= 0) return null;
-        URI installer = manifestUri.resolve(url);
-        if (!validSha256(sha256) || !LauncherConfig.secure(installer)) throw new IOException("Launcher update manifest is not trustworthy");
-        return new Update(version, installer, sha256, root.path("release_notes").asText(""));
+    static java.security.PublicKey releaseKey() throws Exception {
+        return java.security.KeyFactory.getInstance("Ed25519").generatePublic(new java.security.spec.X509EncodedKeySpec(java.util.Base64.getDecoder().decode(RELEASE_PUBLIC_KEY)));
     }
 
+    /** Base64 Ed25519 signature (openssl pkeyutl -sign -rawin) over the exact checksum file bytes. */
+    static boolean signed(byte[] data,String signatureBase64,java.security.PublicKey key){
+        try{var verifier=java.security.Signature.getInstance("Ed25519");verifier.initVerify(key);verifier.update(data);return verifier.verify(java.util.Base64.getDecoder().decode(signatureBase64));}
+        catch(Exception invalid){return false;}
+    }
+
+    private HttpRequest.Builder githubRequest(URI uri,Duration timeout){return HttpRequest.newBuilder(uri).timeout(timeout).header("Accept","application/vnd.github+json").header("X-GitHub-Api-Version","2022-11-28").header("User-Agent","Erdvyn-Launcher/"+CURRENT_VERSION);}
     Path download(Update update) throws Exception {
         Path directory = LauncherPaths.appRoot().resolve("updates");
         Files.createDirectories(directory);

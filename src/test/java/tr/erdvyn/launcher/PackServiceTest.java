@@ -5,10 +5,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.sun.net.httpserver.HttpServer;
+
+import java.net.InetSocketAddress;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.Random;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -73,6 +86,56 @@ final class PackServiceTest {
     void rejectsRemovalOutsideManagedPackRoots(@TempDir Path game) throws Exception {
         JsonNode manifest = JSON.readTree("{\"remove_paths\":[\"../options.txt\"]}");
         assertThrows(Exception.class, () -> PackService.removeRequestedPaths(game, manifest, ignored -> {}));
+    }
+
+    @Test
+    void downloadCountsBytesRejectsBadHashAndCancelsAStalledTransfer(@TempDir Path dir) throws Exception {
+        byte[] body = new byte[200_000];
+        new Random(7).nextBytes(body);
+        String sha = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(body));
+        CountDownLatch release = new CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/ok", exchange -> { exchange.sendResponseHeaders(200, body.length); try (var out = exchange.getResponseBody()) { out.write(body); } });
+        server.createContext("/stall", exchange -> {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body, 0, 70_000);
+            exchange.getResponseBody().flush();
+            try { release.await(); } catch (InterruptedException ignored) {}
+            exchange.close();
+        });
+        server.setExecutor(Executors.newCachedThreadPool(task -> { Thread thread = new Thread(task); thread.setDaemon(true); return thread; }));
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort();
+            PackService pack = new PackService();
+            long[] seen = {0};
+            Path ok = dir.resolve("mods/ok.jar");
+            pack.download(URI.create(base + "/ok"), ok, sha, new AtomicBoolean(), bytes -> seen[0] = bytes);
+            assertEquals(body.length, seen[0]);
+            assertArrayEquals(body, Files.readAllBytes(ok));
+
+            Path bad = dir.resolve("mods/bad.jar");
+            assertThrows(java.io.IOException.class, () -> pack.download(URI.create(base + "/ok"), bad, "0".repeat(64), new AtomicBoolean(), bytes -> {}));
+            assertFalse(Files.exists(bad));
+
+            // The server stops sending mid-file: only abortDownload can wake the blocked read.
+            AtomicBoolean cancel = new AtomicBoolean(), armed = new AtomicBoolean();
+            Path stalled = dir.resolve("mods/stalled.jar");
+            long started = System.nanoTime();
+            assertThrows(CancellationException.class, () -> pack.download(URI.create(base + "/stall"), stalled, sha, cancel, bytes -> {
+                if (armed.compareAndSet(false, true)) Thread.startVirtualThread(() -> {
+                    try { Thread.sleep(300); } catch (InterruptedException ignored) {}
+                    cancel.set(true);
+                    pack.abortDownload();
+                });
+            }));
+            assertTrue(System.nanoTime() - started < 5_000_000_000L, "cancel must not wait for the stalled server");
+            assertFalse(Files.exists(stalled));
+            assertFalse(Files.exists(stalled.resolveSibling("stalled.jar.erdvyn-download")));
+        } finally {
+            release.countDown();
+            server.stop(0);
+        }
     }
 
     @Test

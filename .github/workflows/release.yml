@@ -60,13 +60,27 @@ jobs:
         with:
           name: erdvyn-launcher-${{ needs.build.outputs.version }}
           path: dist
+      # Launchers from 2.1.24 on only install releases whose SHA256SUMS.txt carries this Ed25519 signature.
+      # The key is used here, in a job that runs no project code, never in the Gradle build job.
+      - name: sign checksums
+        env:
+          SIGNING_KEY: ${{ secrets.LAUNCHER_SIGNING_KEY }}
+        run: |
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::warning::LAUNCHER_SIGNING_KEY is not set: this release is unsigned and launchers 2.1.24+ will not offer it"
+            exit 0
+          fi
+          set -o pipefail
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/key.pem"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/key.pem" -rawin -in dist/SHA256SUMS.txt | base64 -w0 > dist/SHA256SUMS.txt.sig
+          rm -f "$RUNNER_TEMP/key.pem"
       - name: publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
         run: |
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes \
-            "dist/Erdvyn-Launcher-Setup-$VERSION.exe" \
-            "dist/Erdvyn-Launcher-Portable-$VERSION.zip" \
-            "dist/SHA256SUMS.txt"
+          files=("dist/Erdvyn-Launcher-Setup-$VERSION.exe" "dist/Erdvyn-Launcher-Portable-$VERSION.zip" "dist/SHA256SUMS.txt")
+          if [ -f dist/SHA256SUMS.txt.sig ]; then files+=("dist/SHA256SUMS.txt.sig"); fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --generate-notes "${files[@]}"

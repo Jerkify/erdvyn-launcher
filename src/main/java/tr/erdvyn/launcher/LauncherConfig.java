@@ -32,7 +32,11 @@ final class LauncherConfig {
     }
     static String launcherGithubRepository() { return value("ERDVYN_LAUNCHER_GITHUB", "launcher.github.repository", "Jerkify/erdvyn-launcher"); }
     static String serverAddress() { return value("ERDVYN_SERVER_ADDRESS", "server.address", LauncherPaths.DEFAULT_SERVER); }
-    static String statusAddress() { return value("ERDVYN_STATUS_ADDRESS", "server.status.address", "57.128.231.8:25575"); }
+    static String statusAddress() {
+        String value = value("ERDVYN_STATUS_ADDRESS", "server.status.address", LauncherPaths.DEFAULT_SERVER + ":25575");
+        // Older launchers wrote the raw server IP into launcher.properties; follow DNS instead so a server move needs no client change.
+        return value.equals("57.128.231.8:25575") ? LauncherPaths.DEFAULT_SERVER + ":25575" : value;
+    }
 
     static Path path() { return LauncherPaths.appRoot().resolve("launcher.properties"); }
 
@@ -53,7 +57,7 @@ final class LauncherConfig {
             } else {
                 String defaults = String.join("\n",
                         "server.address=" + LauncherPaths.DEFAULT_SERVER,
-                        "server.status.address=57.128.231.8:25575",
+                        "server.status.address=" + LauncherPaths.DEFAULT_SERVER + ":25575",
                         "api.url=" + PRODUCTION_API,
                         "account.url=https://account.erdvyn.net",
                         "pack.manifest.url=" + PRODUCTION_API + "/api/pack/manifest",

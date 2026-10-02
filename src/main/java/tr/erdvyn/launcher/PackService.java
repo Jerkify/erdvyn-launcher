@@ -16,17 +16,31 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.LongConsumer;
 
 final class PackService {
-    record Progress(double value, String line) {}
-    record Result(int verified, int downloaded, int kept, int failed, String version) {}
+    /** A blank line marks a byte tick of the running download: update the meters, do not log it. */
+    record Progress(double value, String line, long bytesDone, long bytesTotal, double bytesPerSecond) {
+        Progress(double value, String line) { this(value, line, 0, 0, 0); }
+        boolean tick() { return line.isEmpty(); }
+    }
+    /** firstError keeps the original exception so the UI can turn it into an actionable message. */
+    record Result(int verified, int downloaded, int kept, int failed, String version, Throwable firstError) {}
+    private record Pending(String relative, Path target, String expected, String url, long size) {}
     record Summary(int files, int mods, int configs, int resourcepacks, int shaderpacks, long bytes, String version) {
         static Summary empty() { return new Summary(0, 0, 0, 0, 0, 0, "--"); }
     }
@@ -45,8 +59,25 @@ final class PackService {
             "schematics", "xaero", "xaerowaypoints_backup240807"
     );
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).followRedirects(HttpClient.Redirect.NORMAL).build();
+    private volatile InputStream activeDownload;
 
+    /** CLI entry points: no cancel button, and they print every event, so byte ticks are dropped. */
     Result verifyAndRepair(Consumer<Progress> progress) throws Exception {
+        return verifyAndRepair(event -> { if (!event.tick()) progress.accept(event); }, new AtomicBoolean());
+    }
+
+    /** Closes the in-flight download so a stalled read returns at once; the loop then sees the cancel flag. */
+    void abortDownload() {
+        InputStream active = activeDownload;
+        if (active != null) try { active.close(); } catch (IOException ignored) {}
+    }
+
+    /**
+     * Audits every file first (hash pass), then downloads what is missing or wrong (byte pass), so the
+     * download meter knows its total up front. Setting {@code cancel} stops at the next file or chunk with a
+     * CancellationException: partial temp files are deleted and the install state is never written.
+     */
+    Result verifyAndRepair(Consumer<Progress> progress, AtomicBoolean cancel) throws Exception {
         LauncherPaths.prepareInstance();
         String manifestUrl = LauncherConfig.packManifestUrl();
         if (manifestUrl == null || manifestUrl.isBlank()) {
@@ -54,7 +85,7 @@ final class PackService {
         }
         progress.accept(new Progress(.02, "MANIFEST  " + manifestUrl));
         HttpRequest request = freshManifestRequest(manifestUrl, Duration.ofSeconds(30));
-        HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> response = await(http.sendAsync(request, HttpResponse.BodyHandlers.ofString()), cancel);
         if (response.statusCode() / 100 != 2) throw new IOException("Manifest HTTP " + response.statusCode());
         Path cachedManifest=LauncherPaths.appRoot().resolve("active-pack-manifest.json");Files.createDirectories(cachedManifest.getParent());Files.writeString(cachedManifest,response.body());
         JsonNode root = JSON.readTree(response.body());
@@ -64,42 +95,68 @@ final class PackService {
         Path game = LauncherPaths.gameDirectory().toAbsolutePath().normalize();
         removeRequestedPaths(game, root, LauncherPaths.appRoot().resolve(CLEANUP_STATE), progress);
         int total = files.size(), verified = 0, downloaded = 0, kept = 0, failed = 0, index = 0;
+        Throwable firstError = null;
         Set<Path> managedFiles = new HashSet<>();
+        List<Pending> pending = new ArrayList<>();
+        // A cheap size probe decides the bar split: hashing is fast, so an install that will download gets most of the bar for bytes.
+        double auditEnd = .98;
         for (JsonNode entry : files) {
+            Path probe = game.resolve(entry.path("path").asText()).normalize();long size = entry.path("size").asLong(0);
+            if (!Files.isRegularFile(probe) || size > 0 && Files.size(probe) != size) { auditEnd = .30; break; }
+        }
+        for (JsonNode entry : files) {
+            checkCancel(cancel);
             index++;
             String relative = entry.path("path").asText(), expected = entry.path("sha256").asText().toLowerCase(Locale.ROOT);
             Path target = game.resolve(relative).normalize();
             if (relative.isBlank() || !target.startsWith(game)) throw new IOException("Unsafe manifest path: " + relative);
             managedFiles.add(target);
-            double base = .04 + .94 * (index - 1) / Math.max(1, total);
+            double at = .04 + (auditEnd - .04) * index / Math.max(1, total);
             if (Files.isRegularFile(target) && shouldPreserveExisting(root, entry, relative)) {
                 kept++;
-                progress.accept(new Progress(base, "[KEEP] " + relative));
+                progress.accept(new Progress(at, "[KEEP] " + relative));
                 continue;
             }
             if (Files.isRegularFile(target) && !expected.isBlank() && expected.equals(sha256(target))) {
                 verified++;
-                progress.accept(new Progress(base, "[OK] " + relative));
+                progress.accept(new Progress(at, "[OK] " + relative));
                 continue;
             }
             String url = entry.path("url").asText();
             if (url.isBlank()) {
                 failed++;
-                progress.accept(new Progress(base, "[MISSING] " + relative));
+                if (firstError == null) firstError = new IOException("Manifest entry has no download URL: " + relative);
+                progress.accept(new Progress(at, "[MISSING] " + relative));
                 continue;
             }
-            progress.accept(new Progress(base, "[GET] " + relative));
+            pending.add(new Pending(relative, target, expected, url, Math.max(0, entry.path("size").asLong(0))));
+        }
+        Meter meter = new Meter(pending.stream().mapToLong(Pending::size).sum());
+        double downloadStart = auditEnd;
+        for (Pending file : pending) {
+            checkCancel(cancel);
+            long before = meter.done;
+            progress.accept(meter.progress(downloadStart, "[GET] " + file.relative()));
             try {
                 // Fail closed: pack files run inside the game, so an unhashed or plain-http entry is never installed.
-                if (!expected.matches("[0-9a-f]{64}")) throw new IOException("manifest entry has no SHA-256");
-                URI source = URI.create(manifestUrl).resolve(url);
+                if (!file.expected().matches("[0-9a-f]{64}")) throw new IOException("manifest entry has no SHA-256");
+                URI source = URI.create(manifestUrl).resolve(file.url());
                 if (!LauncherConfig.secure(source)) throw new IOException("insecure download URL");
-                download(source.toString(), target, expected);
+                download(source, file.target(), file.expected(), cancel, bytes -> {
+                    meter.done = before + bytes;
+                    if (meter.sample()) progress.accept(meter.progress(downloadStart, ""));
+                });
                 downloaded++;
-                progress.accept(new Progress(base + .9 / Math.max(1, total), "[SAVED] " + relative));
+                meter.done = before + Math.max(file.size(), meter.done - before);
+                progress.accept(meter.progress(downloadStart, "[SAVED] " + file.relative()));
+            } catch (CancellationException stop) {
+                throw stop;
             } catch (Exception error) {
                 failed++;
-                progress.accept(new Progress(base, "[FAIL] " + relative + " / " + error.getMessage()));
+                if (firstError == null) firstError = error;
+                meter.done = before + file.size(); // a failed file must not leave the ETA counting its bytes as still to come
+                String message = error.getMessage() == null ? "" : error.getMessage();
+                progress.accept(meter.progress(downloadStart, "[FAIL] " + file.relative() + " / " + (error.getClass() == IOException.class ? message : error.getClass().getSimpleName() + (message.isBlank() ? "" : ": " + message))));
             }
         }
         JsonNode enforceRoots = root.path("enforce_roots");
@@ -122,9 +179,39 @@ final class PackService {
                 }
             }
         }
+        checkCancel(cancel);
         progress.accept(new Progress(1, failed == 0 ? "PACKAGE VERIFIED" : "PACKAGE HAS " + failed + " ERRORS"));
         if (failed == 0) writeInstallState(version, cachedManifest, total);
-        return new Result(verified, downloaded, kept, failed, version);
+        return new Result(verified, downloaded, kept, failed, version, firstError);
+    }
+
+    private static void checkCancel(AtomicBoolean cancel) { if (cancel.get()) throw new CancellationException("Pack verification cancelled"); }
+
+    /** Waits for an HTTP exchange but gives up within 250 ms of a cancel, aborting the request. */
+    private static <T> T await(CompletableFuture<T> future, AtomicBoolean cancel) throws Exception {
+        while (true) {
+            try { return future.get(250, TimeUnit.MILLISECONDS); }
+            catch (TimeoutException waiting) { if (cancel.get()) { future.cancel(true); throw new CancellationException("Pack verification cancelled"); } }
+            catch (ExecutionException failed) { throw failed.getCause() instanceof Exception cause ? cause : failed; }
+        }
+    }
+
+    /** Download bytes for the progress events: total is known after the audit; the rate is a moving average sampled every 200 ms. */
+    private static final class Meter {
+        final long total; long done; double rate; private long sampledAt = System.nanoTime(), sampledBytes;
+        Meter(long total) { this.total = total; }
+        boolean sample() {
+            long now = System.nanoTime();
+            if (now - sampledAt < 200_000_000L) return false;
+            double instant = (done - sampledBytes) * 1e9 / (now - sampledAt);
+            rate = rate == 0 ? instant : rate * .7 + instant * .3;
+            sampledAt = now; sampledBytes = done;
+            return true;
+        }
+        Progress progress(double start, String line) {
+            long shownTotal = Math.max(total, done);
+            return new Progress(start + (.98 - start) * (shownTotal == 0 ? 1 : done / (double) shownTotal), line, done, shownTotal, rate);
+        }
     }
 
     boolean isInstalled() {
@@ -213,16 +300,34 @@ final class PackService {
     }
 
 
-    private void download(String url, Path target, String expectedSha256) throws Exception {
+    /** Streams into a temp file while hashing, reporting bytes received per chunk; the temp file never survives a failure or cancel. */
+    void download(URI url, Path target, String expectedSha256, AtomicBoolean cancel, LongConsumer received) throws Exception {
         Files.createDirectories(target.getParent());
         Path temp = target.resolveSibling(target.getFileName() + ".erdvyn-download");
-        // BodyHandlers.ofFile does not truncate: a stale longer temp file would leave trailing bytes.
-        Files.deleteIfExists(temp);
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(3)).GET().build();
+        HttpRequest request = HttpRequest.newBuilder(url).timeout(Duration.ofMinutes(3)).GET().build();
         try {
-            HttpResponse<Path> response = http.send(request, HttpResponse.BodyHandlers.ofFile(temp));
-            if (response.statusCode() / 100 != 2) throw new IOException("HTTP " + response.statusCode());
-            if (!expectedSha256.equalsIgnoreCase(sha256(temp))) throw new IOException("SHA-256 mismatch");
+            HttpResponse<InputStream> response = await(http.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream()), cancel);
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            // newOutputStream truncates, so a stale longer temp file cannot leave trailing bytes.
+            try (InputStream input = response.body(); var output = Files.newOutputStream(temp)) {
+                activeDownload = input;
+                checkCancel(cancel); // a cancel that ran before activeDownload was set could not close this stream
+                if (response.statusCode() / 100 != 2) throw new IOException("HTTP " + response.statusCode());
+                byte[] buffer = new byte[1 << 16];
+                long total = 0;
+                for (int read; (read = input.read(buffer)) >= 0 && !cancel.get(); ) {
+                    output.write(buffer, 0, read);
+                    digest.update(buffer, 0, read);
+                    received.accept(total += read);
+                }
+            } catch (IOException readFailed) {
+                checkCancel(cancel); // a stream closed by abortDownload fails its read: report the cancel, not an I/O error
+                throw readFailed;
+            } finally {
+                activeDownload = null;
+            }
+            checkCancel(cancel); // abortDownload ends the stream early; that is a cancel, not a short file
+            if (!expectedSha256.equalsIgnoreCase(HexFormat.of().formatHex(digest.digest()))) throw new IOException("SHA-256 mismatch");
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } finally {
             Files.deleteIfExists(temp);

@@ -65,7 +65,8 @@ final class MinecraftLaunchService {
         command.add("-Duser.language=en");
         command.add("-Duser.country=US");
         command.add("-Duser.variant=");
-        if(erdvynTicket!=null&&!erdvynTicket.isBlank())command.add("-Derdvyn.sessionTicket="+erdvynTicket);
+        boolean hasTicket=erdvynTicket!=null&&!erdvynTicket.isBlank(),ticketInEnvironment=hasTicket&&ticketViaEnvironment(game);
+        if(hasTicket&&!ticketInEnvironment)command.add("-Derdvyn.sessionTicket="+erdvynTicket);
         appendArguments(command, vanilla.path("arguments").path("jvm"), variables, autoConnect);
         appendArguments(command, neo.path("arguments").path("jvm"), variables, autoConnect);
         addLoggingArgument(command, vanilla, install, variables);
@@ -86,6 +87,7 @@ final class MinecraftLaunchService {
 
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(game.toFile());
+        if(ticketInEnvironment)builder.environment().put("ERDVYN_SESSION_TICKET",erdvynTicket);
         builder.redirectErrorStream(true);
         builder.redirectOutput(ProcessBuilder.Redirect.appendTo(processLog.toFile()));
         Process process = builder.start();
@@ -93,6 +95,16 @@ final class MinecraftLaunchService {
         if (!process.isAlive()) throw new IOException("Minecraft exited during startup. See " + processLog);
         log.accept("PROCESS STARTED / PID " + process.pid());
         return process;
+    }
+
+    /** erdvyn_lib 0.2.8+ reads the ticket from the environment, where other programs cannot read it off the command line. */
+    static boolean ticketViaEnvironment(Path game) {
+        try (var mods = Files.list(game.resolve("mods"))) {
+            return mods.map(path -> path.getFileName().toString()).filter(name -> name.matches("erdvyn_lib-[0-9.]+\\.jar"))
+                    .anyMatch(name -> LauncherUpdateService.compareVersions(name.substring(11, name.length() - 4), "0.2.8") >= 0);
+        } catch (IOException missing) {
+            return false;
+        }
     }
 
     void awaitReady(Process process, Consumer<String> log) throws Exception {

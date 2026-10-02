@@ -52,6 +52,7 @@ final class LauncherPaths {
             case "config" -> "config";
             case "screenshots" -> "screenshots";
             case "logs" -> "logs";
+            case "crash-reports" -> "crash-reports";
             default -> "";
         };
         Path result = safe.isEmpty() ? root : root.resolve(safe);
