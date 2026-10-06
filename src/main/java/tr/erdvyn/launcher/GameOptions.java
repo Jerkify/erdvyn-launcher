@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.prefs.Preferences;
 
 final class GameOptions {
-    private static final Preferences PREFS = Preferences.userNodeForPackage(ErdvynLauncher.class);
+    private static final Preferences PREFS = Boolean.getBoolean("erdvyn.uiTest") ? Preferences.userRoot().node("/erdvyn-ui-language-test/GameOptions") : Preferences.userNodeForPackage(ErdvynLauncher.class);
     private final Map<String, String> values = new LinkedHashMap<>();
     private final Path file;
 
@@ -20,6 +20,8 @@ final class GameOptions {
         load();
     }
 
+    /** Installed memory in whole GB (rounded, so a 15.9 GB report reads as 16). */
+    static final int PHYSICAL_GB = (int) Math.round(physicalMemoryBytes() / (double) (1L << 30));
     // Leave ~2 GB for Windows and the launcher: an 8 GB laptop must not be offered an 8 GB heap.
     static final int MAX_RAM_GB = clamp((int) (physicalMemoryBytes() >> 30) - 2, 2, 16);
 
@@ -47,14 +49,18 @@ final class GameOptions {
     private void load() {
         if (!Files.isRegularFile(file)) return;
         try {
-            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+            List<String> lines = Files.readAllLines(file, StandardCharsets.UTF_8);
+            values.clear();
+            for (String line : lines) {
                 int split = line.indexOf(':');
                 if (split > 0) values.put(line.substring(0, split), line.substring(split + 1));
             }
         } catch (IOException ignored) {}
     }
 
+    /** Re-reads the file first: Minecraft rewrites options.txt on exit, and a stale copy here would undo the player's in-game changes. */
     private void set(String key, String value) {
+        load();
         values.put(key, value);
         try { save(); } catch (IOException ignored) {}
     }
@@ -63,7 +69,10 @@ final class GameOptions {
         Files.createDirectories(file.getParent());
         List<String> lines = new ArrayList<>(values.size());
         values.forEach((key, value) -> lines.add(key + ":" + value));
-        Files.write(file, lines, StandardCharsets.UTF_8);
+        Path temp = file.resolveSibling("options.txt.erdvyn-tmp");
+        Files.write(temp, lines, StandardCharsets.UTF_8);
+        try { Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE); }
+        catch (IOException atomicMoveUnsupported) { Files.move(temp, file, java.nio.file.StandardCopyOption.REPLACE_EXISTING); }
     }
 
     private int integer(String key, int fallback, int min, int max) {

@@ -29,16 +29,58 @@ final class LauncherUpdateService {
     /** Ed25519 key that signs SHA256SUMS.txt in the release workflow (secret LAUNCHER_SIGNING_KEY). Private half: .local/secrets. */
     static final String RELEASE_PUBLIC_KEY="MCowBQYDK2VwAyEAPtfk/1pBhQdKXB7MvvtKp6y9CsMLz0I3KZjuNlQAxhE=";
 
-    // GitHub releases are the only update source: a second, unsigned manifest path would be a second way in.
+    /**
+     * The project's own site first (a folder of release files), then GitHub releases. Both are trusted only through
+     * the Ed25519 signature on SHA256SUMS.txt, never through the host. A source that is not there (404, or a private
+     * repository) means "no update", not an error; a failing site is reported only when GitHub has nothing either.
+     */
     Update check() throws Exception {
+        Exception siteFailure=null;
+        try{Update fromSite=checkFeed(LauncherConfig.launcherFeedUrl());if(fromSite!=null)return fromSite;}
+        catch(Exception failure){siteFailure=failure;LauncherLog.write("Launcher feed: "+failure.getMessage());}
         String repository=LauncherConfig.launcherGithubRepository();
-        return repository==null||repository.isBlank()?null:checkGithub(repository.strip());
+        Update fromGithub=repository==null||repository.isBlank()?null:checkGithub(repository.strip());
+        if(fromGithub==null&&siteFailure!=null)throw siteFailure;
+        return fromGithub;
+    }
+
+    /**
+     * A plain https folder holding a release's own files, copied unchanged: SHA256SUMS.txt, SHA256SUMS.txt.sig and
+     * Erdvyn-Launcher-Setup-X.Y.Z.exe. The version comes from the installer name inside the signed file, so nothing
+     * unsigned decides what is offered.
+     */
+    Update checkFeed(String base) throws Exception {
+        if(base==null||base.isBlank())return null;
+        String folder=base.strip().endsWith("/")?base.strip():base.strip()+"/";
+        URI sumsUri=URI.create(folder+"SHA256SUMS.txt");
+        if(!LauncherConfig.secure(sumsUri))throw new IOException("Launcher feed is not https");
+        byte[] sums=fetchOptional(sumsUri);if(sums==null)return null;
+        byte[] signature=fetchOptional(URI.create(folder+"SHA256SUMS.txt.sig"));if(signature==null)throw new IOException("Launcher feed is not signed");
+        if(!signed(sums,new String(signature,StandardCharsets.US_ASCII).strip(),releaseKey()))throw new IOException("Launcher feed has an invalid signature");
+        String newest=null,sha=null;
+        for(String line:new String(sums,StandardCharsets.UTF_8).split("\\R")){
+            String[] parts=line.strip().split("\\s+",2);if(parts.length!=2||!validSha256(parts[0]))continue;
+            var name=java.util.regex.Pattern.compile("Erdvyn-Launcher-Setup-(\\d+\\.\\d+\\.\\d+)\\.exe").matcher(parts[1].replaceFirst("^[*]","").strip());
+            if(name.matches()&&(newest==null||compareVersions(name.group(1),newest)>0)){newest=name.group(1);sha=parts[0];}
+        }
+        if(newest==null||compareVersions(newest,CURRENT_VERSION)<=0)return null;
+        return new Update(newest,URI.create(folder+"Erdvyn-Launcher-Setup-"+newest+".exe"),sha.toLowerCase(Locale.ROOT),"");
+    }
+
+    /** A small feed file, or null when the server says it is not there (404). */
+    private byte[] fetchOptional(URI uri) throws Exception {
+        HttpResponse<byte[]> response=http.send(HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(20)).header("User-Agent","Erdvyn-Launcher/"+CURRENT_VERSION).GET().build(),HttpResponse.BodyHandlers.ofByteArray());
+        if(response.statusCode()==404)return null;
+        if(response.statusCode()/100!=2)throw new IOException("Launcher feed HTTP "+response.statusCode());
+        if(response.body().length>64*1024)throw new IOException("Launcher feed file is unexpectedly large");
+        return response.body();
     }
 
     private Update checkGithub(String repository) throws Exception {
         if(!repository.matches("[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"))throw new IOException("Invalid launcher GitHub repository");
         URI releaseUri=URI.create("https://api.github.com/repos/"+repository+"/releases/latest");
         HttpResponse<String> response=http.send(githubRequest(releaseUri,Duration.ofSeconds(20)).GET().build(),HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        if(response.statusCode()==404)return null; // no release yet, or a private repository: nothing to offer
         if(response.statusCode()/100!=2)throw new IOException("GitHub release HTTP "+response.statusCode());
         JsonNode root=JSON.readTree(response.body());
         String version=root.path("tag_name").asText(root.path("name").asText("")).strip().replaceFirst("^[vV]","");

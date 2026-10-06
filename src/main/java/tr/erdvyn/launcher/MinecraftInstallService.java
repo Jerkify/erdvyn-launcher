@@ -47,6 +47,7 @@ final class MinecraftInstallService {
         Path neoClient=install.resolve("libraries").resolve("net/neoforged/neoforge/21.1.243/neoforge-21.1.243-client.jar");
         if (neoForgeReady(neo,neoClient)) {
             ensureLibraries(install,JSON.readTree(Files.readString(neo)),"NEOFORGE LIBRARIES",log);
+            HashCache.shared().save();
             log.accept("MINECRAFT 1.21.1 / NEOFORGE 21.1.243 READY");
             return;
         }
@@ -61,7 +62,9 @@ final class MinecraftInstallService {
             if(attempt>1)log.accept("RETRYING NEOFORGE INSTALLATION "+attempt+"/3");
             Process process = new ProcessBuilder(java.toString(),"-jar",installer.toString(),"--install-client",install.toString())
                     .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.appendTo(installerLog.toFile())).start();
-            if(!process.waitFor(12, TimeUnit.MINUTES)){process.destroyForcibly();throw new IOException("NeoForge installation timed out");}
+            // A cancelled launch interrupts this wait: the installer must not keep writing into the install behind the next attempt.
+            try{if(!process.waitFor(12, TimeUnit.MINUTES)){process.destroyForcibly();throw new IOException("NeoForge installation timed out");}}
+            catch(InterruptedException cancelled){process.descendants().forEach(ProcessHandle::destroyForcibly);process.destroyForcibly();throw cancelled;}
             exit=process.exitValue();
             if(exit==0)break;
             if(attempt<3)Thread.sleep(attempt*1500L);
@@ -69,11 +72,12 @@ final class MinecraftInstallService {
         if(exit!=0)throw new IOException("NeoForge installation failed after 3 attempts (exit "+exit+"). See "+installerLog);
         if(!Files.isRegularFile(vanilla)||!Files.isRegularFile(client)||!neoForgeReady(neo,neoClient))throw new IOException("NeoForge installer completed without the required version files");
         ensureLibraries(install,JSON.readTree(Files.readString(neo)),"NEOFORGE LIBRARIES",log);
+        HashCache.shared().save();
         log.accept("INSTALLATION COMPLETE");
     }
 
     private void ensureNeoForgeInstaller(Path installer, Consumer<String> log) throws Exception {
-        if(Files.isRegularFile(installer)&&INSTALLER_SHA256.equals(PackService.sha256(installer)))return;
+        if(Files.isRegularFile(installer)&&INSTALLER_SHA256.equals(HashCache.shared().sha256(installer,true)))return;
         log.accept("DOWNLOADING NEOFORGE INSTALLER");
         Exception last=null;
         for(int attempt=1;attempt<=3;attempt++){
@@ -224,6 +228,7 @@ final class MinecraftInstallService {
                 if(!expectedSha1.equalsIgnoreCase(sha1(temp)))throw new IOException("Download checksum mismatch");
                 try{Files.move(temp,target,StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}
                 catch(IOException unsupported){Files.move(temp,target,StandardCopyOption.REPLACE_EXISTING);}
+                HashCache.shared().remember(target,"SHA-1",expectedSha1);
                 return;
             }catch(Exception ex){last=ex;Files.deleteIfExists(temp);if(attempt<3)Thread.sleep(attempt*1500L);}
         }
@@ -238,7 +243,7 @@ final class MinecraftInstallService {
     private static boolean validDownload(Download download, boolean verifyHash) {
         if(!validSize(download.target(),download.size()))return false;
         if(!verifyHash)return true;
-        try{return download.sha1().equalsIgnoreCase(sha1(download.target()));}
+        try{return download.sha1().equalsIgnoreCase(HashCache.shared().sha1(download.target(),true));}
         catch(Exception ignored){return false;}
     }
 
@@ -257,7 +262,7 @@ final class MinecraftInstallService {
     }
 
     private static boolean neoForgeReady(Path profile, Path client) {
-        try{return Files.isRegularFile(profile)&&Files.isRegularFile(client)&&!JSON.readTree(Files.readString(profile)).path("mainClass").asText().isBlank()&&NEOFORGE_CLIENT_SHA256.equalsIgnoreCase(PackService.sha256(client));}
+        try{return Files.isRegularFile(profile)&&Files.isRegularFile(client)&&!JSON.readTree(Files.readString(profile)).path("mainClass").asText().isBlank()&&NEOFORGE_CLIENT_SHA256.equalsIgnoreCase(HashCache.shared().sha256(client,true));}
         catch(Exception ignored){return false;}
     }
 

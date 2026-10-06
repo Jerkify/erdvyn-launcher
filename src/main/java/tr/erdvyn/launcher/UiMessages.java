@@ -22,7 +22,7 @@ final class UiMessages {
             {"PREPARING GAME INSTANCE","OYUN KURULUMU HAZIRLANIYOR"},{"game process","oyun işlemi"},{"SPAWNING GAME PROCESS","OYUN İŞLEMİ BAŞLATILIYOR"},{"HANDOFF TO MINECRAFT","MINECRAFT'A GEÇİLİYOR"},
             {"POWERING ERDVYN CONTROL TERMINAL","ERDVYN KONTROL TERMİNALİ AÇILIYOR"},{"MEMORY MAP .................... OK","BELLEK HARİTASI ............... TAMAM"},
             {"CRT PHOSPHOR LAYER ............ READY","CRT FOSFOR KATMANI ............ HAZIR"},{"LOADING PIXEL GLYPH ROM","PİKSEL YAZI TİPİ YÜKLENİYOR"},
-            {"amber color table","kehribar renk tablosu"},{"MOUNTING USER PREFERENCES","KULLANICI TERCİHLERİ YÜKLENİYOR"},{"INITIALIZING VIDEO BUS","GÖRÜNTÜ HATTI HAZIRLANIYOR"},
+            {"amber color table","kehribar renk tablosu"},{"phosphor color table","fosfor renk tablosu"},{"MOUNTING USER PREFERENCES","KULLANICI TERCİHLERİ YÜKLENİYOR"},{"INITIALIZING VIDEO BUS","GÖRÜNTÜ HATTI HAZIRLANIYOR"},
             {"camera playlist / 07","kamera oynatma listesi / 07"},{"INITIALIZING AUDIO DEVICE","SES AYGITI HAZIRLANIYOR"},{"mechanical UI channel","mekanik arayüz ses kanalı"},
             {"STARTING NETWORK MONITOR","AĞ İZLEYİCİ BAŞLATILIYOR"},{"REGISTERING PANEL MODULES","PANEL MODÜLLERİ HAZIRLANIYOR"},{"SYNCHRONIZING SYSTEM CLOCK","SİSTEM SAATİ EŞİTLENİYOR"},{"UI BUS HANDOFF","ARAYÜZE GEÇİLİYOR"},
             {"PACKAGE VERIFIED","PAKET DOĞRULANDI"},{"PACKAGE HAS %d ERRORS","PAKETTE %d HATA VAR"},
@@ -86,6 +86,8 @@ final class UiMessages {
         String s=text.toString().toLowerCase(Locale.ROOT);
         if(s.contains("java 21 runtime was not found")||s.contains("java 21 is required"))return new String[]{"Java 21 bulunamadı. Launcher'ı yeniden kur veya 64-bit Java 21 yükle.","Java 21 was not found. Reinstall the launcher or install 64-bit Java 21."};
         if(s.contains("does not own minecraft")||s.contains("no java profile")||s.contains("entitlement")||s.contains("minecraft profile"))return new String[]{"Bu Microsoft hesabında Minecraft: Java Edition profili yok. minecraft.net'te profil oluştur ya da doğru hesapla gir.","This Microsoft account has no Minecraft: Java Edition profile. Create one at minecraft.net or sign in with the right account."};
+        if(s.contains("login timed out")||s.contains("expired_token"))return new String[]{"Giriş süresi doldu. GİRİŞ YAP'a tekrar bas ve kodu 5 dakika içinde onayla.","Sign-in timed out. Press SIGN IN again and confirm the code within 5 minutes."};
+        if(s.contains("authorization_declined")||s.contains("access_denied"))return new String[]{"Giriş tarayıcıda reddedildi. Tekrar dene ve izin ver.","Sign-in was declined in the browser. Try again and allow access."};
         if(s.contains("not enough space")||s.contains("no space left")||s.contains("disk full")||s.contains("disk is full"))return new String[]{"Diskte yer kalmadı. Biraz yer açıp tekrar dene.","The disk is full. Free up some space and try again."};
         if(denied||s.contains("access is denied")||s.contains("being used by another process"))return new String[]{"Dosyaya erişilemedi. Açık bir Minecraft varsa kapat; antivirüs klasörü engelliyor olabilir.","A file could not be accessed. Close any running Minecraft; antivirus may be blocking the folder."};
         if(s.contains("sha-256 mismatch")||s.contains("hash mismatch")||s.contains("checksum mismatch"))return new String[]{"İndirilen dosya doğrulanamadı (SHA-256). Tekrar dene; sürerse yöneticiye bildir.","A downloaded file failed its SHA-256 check. Try again; if it keeps failing, tell an admin."};

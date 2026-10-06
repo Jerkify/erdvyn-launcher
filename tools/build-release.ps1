@@ -33,9 +33,11 @@ try {
     $iconPng=Join-Path $projectRoot 'src\main\resources\assets\erdvyn-app-icon.png'
     $iconIco=Join-Path $projectRoot 'src\main\resources\assets\erdvyn-app-icon.ico'
     New-Item -ItemType Directory -Force -Path (Join-Path $work 'icon-tool') | Out-Null
-    & "$javaRoot\bin\javac.exe" -d (Join-Path $work 'icon-tool') (Join-Path $projectRoot 'tools\IconGenerator.java')
-    & "$javaRoot\bin\java.exe" -cp (Join-Path $work 'icon-tool') IconGenerator (Join-Path $projectRoot 'src\main\resources\assets\erdvyn-logo.png') $iconPng
-    & "$javaRoot\bin\java.exe" -cp (Join-Path $work 'icon-tool') IconGenerator (Join-Path $projectRoot 'src\main\resources\assets\erdvyn-logo.png') $iconIco
+    # The icons are drawn from the launcher's own mark (ErdvynMark.java), so the exe, the window and the UI logo always match.
+    & "$javaRoot\bin\javac.exe" -d (Join-Path $work 'icon-tool') (Join-Path $projectRoot 'tools\IconGenerator.java') (Join-Path $projectRoot 'src\main\java\tr\erdvyn\launcher\ErdvynMark.java')
+    if($LASTEXITCODE -ne 0){throw 'Icon tool build failed'}
+    & "$javaRoot\bin\java.exe" '-Djava.awt.headless=true' -cp (Join-Path $work 'icon-tool') IconGenerator $iconPng $iconIco
+    if($LASTEXITCODE -ne 0){throw 'Icon generation failed'}
     if(Test-Path -LiteralPath $runtime){Remove-Item -LiteralPath $runtime -Recurse -Force}
     $modules=((Get-ChildItem -LiteralPath "$javaRoot\jmods" -Filter '*.jmod' -File | ForEach-Object BaseName) + @('javafx.base','javafx.graphics','javafx.media','javafx.swing')) -join ','
     & "$javaRoot\bin\jlink.exe" --module-path "$javaRoot\jmods;$input" --add-modules $modules --strip-debug --no-header-files --no-man-pages --compress zip-6 --output $runtime

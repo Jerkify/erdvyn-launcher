@@ -121,10 +121,15 @@ final class MinecraftLaunchService {
                 long length = tail.length();
                 if (length < position) position = 0;
                 if (length > position) {
+                    // Only whole lines: a marker split across two writes would otherwise be read as two halves and missed.
+                    byte[] chunk = new byte[(int) Math.min(length - position, 1 << 20)];
                     tail.seek(position);
-                    String raw;
-                    while ((raw = tail.readLine()) != null) {
-                        String line = new String(raw.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1), java.nio.charset.StandardCharsets.UTF_8);
+                    tail.readFully(chunk);
+                    int end = chunk.length;
+                    while (end > 0 && chunk[end - 1] != '\n') end--;
+                    if (end == 0 && chunk.length == 1 << 20) end = chunk.length; // one enormous line: take it as is
+                    position += end;
+                    for (String line : new String(chunk, 0, end, java.nio.charset.StandardCharsets.UTF_8).split("\\R")) {
                         if (line.contains("ModLauncher running") && milestones.add("modlauncher")) log.accept("MODLAUNCHER HANDSHAKE / ACCEPTED");
                         if (line.contains("NeoForge mod loading") && milestones.add("neoforge")) log.accept("NEOFORGE RUNTIME / ONLINE");
                         if (line.contains("Setting user:") && milestones.add("account")) log.accept("ACCOUNT SESSION / BOUND");
@@ -139,7 +144,6 @@ final class MinecraftLaunchService {
                             return;
                         }
                     }
-                    position = tail.getFilePointer();
                 }
                 long now = System.currentTimeMillis();
                 if (now - lastHeartbeat >= 7_000L) {
@@ -229,6 +233,8 @@ final class MinecraftLaunchService {
                         if (relativeName.startsWith("META-INF/") || excludes.stream().anyMatch(relativeName::startsWith)) continue;
                         Path target = natives.resolve(relativeName).normalize();
                         if (!target.startsWith(natives)) throw new IOException("Unsafe native path: " + relativeName);
+                        // Already extracted: a DLL loaded by a still-running game is locked and cannot be overwritten anyway.
+                        if (Files.isRegularFile(target) && Files.size(target) == Files.size(entry)) continue;
                         Files.createDirectories(target.getParent());
                         try (InputStream input = Files.newInputStream(entry)) {
                             Files.copy(input, target, StandardCopyOption.REPLACE_EXISTING);

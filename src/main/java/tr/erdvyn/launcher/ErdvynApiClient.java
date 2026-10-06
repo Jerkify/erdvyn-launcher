@@ -78,7 +78,7 @@ final class ErdvynApiClient {
         HttpRequest request=HttpRequest.newBuilder(URI.create(base+"/api/status")).timeout(Duration.ofSeconds(8)).GET().build();
         HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());
         if(response.statusCode()/100!=2)throw new IllegalStateException(responseError("Status",response));
-        JsonNode root=JSON.readTree(response.body());List<String> players=new ArrayList<>();root.path("players").forEach(node->{String value=node.asText().strip();if(!value.isEmpty())players.add(value);});
+        JsonNode root=JSON.readTree(response.body());List<String> players=new ArrayList<>();root.path("players").forEach(node->{String value=clip(node.asText().strip(),32);if(!value.isEmpty()&&players.size()<MAX_PLAYERS)players.add(value);});
         Long uptime=root.path("uptime_seconds").isNumber()?root.path("uptime_seconds").asLong():null;
         Double tps=root.path("tps").isNumber()?root.path("tps").asDouble():null;
         return new Status(root.path("online").asBoolean(false),uptime,tps,List.copyOf(players));
@@ -89,7 +89,8 @@ final class ErdvynApiClient {
         HttpRequest request=HttpRequest.newBuilder(URI.create(base+"/api/news")).timeout(Duration.ofSeconds(8)).GET().build();
         HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());
         if(response.statusCode()/100!=2)throw new IllegalStateException(responseError("News",response));
-        List<NewsPost> posts=new ArrayList<>();for(JsonNode item:JSON.readTree(response.body()))posts.add(new NewsPost(item.path("id").asLong(),item.path("author_uuid").asText(),item.path("title").asText(),item.path("body").asText(),item.path("image_url").isTextual()?item.path("image_url").asText():null,item.path("published_at").asLong()));
+        List<NewsPost> posts=new ArrayList<>();JsonNode items=JSON.readTree(response.body());if(!items.isArray())throw new IllegalStateException("News response is not a list");
+        for(JsonNode item:items){if(posts.size()>=MAX_NEWS)break;posts.add(new NewsPost(item.path("id").asLong(),clip(item.path("author_uuid").asText(),40),clip(item.path("title").asText(),160),clip(item.path("body").asText(),MAX_BODY),item.path("image_url").isTextual()?clip(item.path("image_url").asText(),500):null,item.path("published_at").asLong()));}
         return List.copyOf(posts);
     }
 
@@ -123,8 +124,12 @@ final class ErdvynApiClient {
         Login active=login;if(active==null||!active.account().admin())return List.of();String base=baseUrl();
         HttpRequest request=HttpRequest.newBuilder(URI.create(base+"/api/admin/activity")).timeout(Duration.ofSeconds(12)).header("Authorization","Bearer "+active.token()).GET().build();
         HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());if(response.statusCode()/100!=2)throw new IllegalStateException(responseError("Admin list",response));
-        List<AdminAccount> admins=new ArrayList<>();for(JsonNode item:JSON.readTree(response.body()).path("admins"))admins.add(new AdminAccount(item.path("uuid").asText(),item.path("minecraft_name").asText("--"),item.path("granted_at").asLong(),"root".equals(item.path("role").asText())));return List.copyOf(admins);
+        List<AdminAccount> admins=new ArrayList<>();for(JsonNode item:JSON.readTree(response.body()).path("admins")){if(admins.size()>=MAX_ADMINS)break;admins.add(new AdminAccount(clip(item.path("uuid").asText(),40),clip(item.path("minecraft_name").asText("--"),32),item.path("granted_at").asLong(),"root".equals(item.path("role").asText())));}return List.copyOf(admins);
     }
+
+    // Server responses are untrusted at this boundary: the UI wraps and paints these strings every frame.
+    static final int MAX_PLAYERS=200,MAX_NEWS=200,MAX_ADMINS=100,MAX_BODY=20_000;
+    static String clip(String value,int max){String clean=value==null?"":value.replaceAll("[\\p{Cntrl}&&[^\\n\\t]]","");return clean.length()>max?clean.substring(0,max):clean;}
 
     private static String responseError(String operation,HttpResponse<String> response){try{String detail=JSON.readTree(response.body()).path("detail").asText();if(!detail.isBlank())return operation+": "+detail;}catch(Exception ignored){}return operation+" HTTP "+response.statusCode();}
 

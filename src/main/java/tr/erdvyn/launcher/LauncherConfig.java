@@ -30,6 +30,8 @@ final class LauncherConfig {
         LauncherLog.write("Ignoring insecure " + key + ": " + value);
         return fallback;
     }
+    /** Folder of signed release files on the project's own site; checked before GitHub (see LauncherUpdateService.checkFeed). */
+    static String launcherFeedUrl() { return url("ERDVYN_LAUNCHER_FEED", "launcher.feed.url", "https://erdvyn.net/launcher/"); }
     static String launcherGithubRepository() { return value("ERDVYN_LAUNCHER_GITHUB", "launcher.github.repository", "Jerkify/erdvyn-launcher"); }
     static String serverAddress() { return value("ERDVYN_SERVER_ADDRESS", "server.address", LauncherPaths.DEFAULT_SERVER); }
     static String statusAddress() {

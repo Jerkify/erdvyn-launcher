@@ -19,7 +19,10 @@ final class LocalSurveyMap {
     private volatile String dimension="",error="";
     private volatile long updatedAt;
     private boolean turkish=true;
+    private Color grid=new Color(201,147,82),label=new Color(227,209,172);
     void setTurkish(boolean value){turkish=value;}
+    /** The launcher page's phosphor: grid lines and sector letters, and the caption text. */
+    void setColors(Color gridColor,Color labelColor){grid=gridColor;label=labelColor;}
     String status(){
         if(!error.isEmpty())return (turkish?"HARİTA EŞİTLEME HATASI: ":"MAP SYNC ERROR: ")+error;
         if(dimension.isEmpty())return turkish?"Yerel eşitleme için oyunda haritayı aç":"Open the map in game to start local synchronization";
@@ -37,23 +40,23 @@ final class LocalSurveyMap {
     void paint(Graphics2D g,int x,int y,int w,int h){
         bounds.setBounds(x,y,w,h);
         if(System.currentTimeMillis()>nextRead&&!loading){nextRead=System.currentTimeMillis()+3000;loading=true;Thread.startVirtualThread(this::read);}
-        Shape old=g.getClip();g.clip(bounds);g.setColor(new Color(10,14,12));g.fillRect(x,y,w,h);
+        Shape old=g.getClip();g.clip(bounds);g.setColor(new Color(6,8,12));g.fillRect(x,y,w,h);
         double ratio=ratio();double ox=x+w/2.0-cx*ratio,oz=y+h/2.0-cz*ratio;
-        g.setColor(new Color(31,35,28));for(int row=y;row<y+h;row+=5)g.drawLine(x,row,x+w,row);
+        g.setColor(new Color(grid.getRed(),grid.getGreen(),grid.getBlue(),16));for(int row=y;row<y+h;row+=5)g.drawLine(x,row,x+w,row);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         for(var tile:tiles){int px=(int)Math.floor(ox+tile.x*16.0*ratio),py=(int)Math.floor(oz+tile.z*16.0*ratio),s=Math.max(1,(int)Math.ceil(16*ratio));if(bounds.intersects(px,py,s,s))g.drawImage(tile.image,px,py,s,s,null);}
-        g.setColor(new Color(201,147,82));
+        g.setColor(grid);
         for(int i=0;i<=8;i++){int px=(int)(ox+(-20000+i*5000)*ratio),py=(int)(oz+(-20000+i*5000)*ratio);g.drawLine(px,(int)(oz-20000*ratio),px,(int)(oz+20000*ratio));g.drawLine((int)(ox-20000*ratio),py,(int)(ox+20000*ratio),py);}
         for(int i=0;i<8;i++){
             int px=(int)(ox+(-17500+i*5000)*ratio),py=(int)(oz+(-17500+i*5000)*ratio);
             g.drawString(Integer.toString(i+1),px,Math.min(y+h-24,(int)(oz+20000*ratio)-5));
             g.drawString(Character.toString((char)('A'+i)),Math.max(x+5,(int)(ox-20000*ratio)+5),py);
         }
-        g.setColor(new Color(9,12,10,235));g.fillRect(x,y,w,25);g.setColor(new Color(227,209,172));
+        g.setColor(new Color(4,6,9,235));g.fillRect(x,y,w,25);g.setColor(label);
         String caption=status();
         while(caption.length()>3&&g.getFontMetrics().stringWidth(caption)>w-24)caption=caption.substring(0,caption.length()-4)+"...";
         g.drawString(caption,x+10,y+17);
-        g.setColor(new Color(9,12,10,235));g.fillRect(x,y+h-24,w,24);g.setColor(new Color(201,147,82));g.drawString(turkish?"TEKERLEK: YAKINLAŞTIR / SÜRÜKLE: KAYDIR / ÇİFT TIKLA: GENEL BAKIŞ":"SCROLL: ZOOM / DRAG: PAN / DOUBLE CLICK: OVERVIEW",x+10,y+h-8);
+        g.setColor(new Color(4,6,9,235));g.fillRect(x,y+h-24,w,24);g.setColor(grid);g.drawString(turkish?"TEKERLEK: YAKINLAŞTIR / SÜRÜKLE: KAYDIR / ÇİFT TIKLA: GENEL BAKIŞ":"SCROLL: ZOOM / DRAG: PAN / DOUBLE CLICK: OVERVIEW",x+10,y+h-8);
         g.setClip(old);
     }
     private void read(){try{

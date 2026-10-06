@@ -72,12 +72,18 @@ final class PackService {
         if (active != null) try { active.close(); } catch (IOException ignored) {}
     }
 
+    /** A full audit: every file is read and hashed again. */
+    Result verifyAndRepair(Consumer<Progress> progress, AtomicBoolean cancel) throws Exception {
+        return verifyAndRepair(progress, cancel, false);
+    }
+
     /**
      * Audits every file first (hash pass), then downloads what is missing or wrong (byte pass), so the
      * download meter knows its total up front. Setting {@code cancel} stops at the next file or chunk with a
      * CancellationException: partial temp files are deleted and the install state is never written.
+     * {@code trustStamps} (the launch path) reuses a hash recorded for the same size and timestamp instead of re-reading the file.
      */
-    Result verifyAndRepair(Consumer<Progress> progress, AtomicBoolean cancel) throws Exception {
+    Result verifyAndRepair(Consumer<Progress> progress, AtomicBoolean cancel, boolean trustStamps) throws Exception {
         LauncherPaths.prepareInstance();
         String manifestUrl = LauncherConfig.packManifestUrl();
         if (manifestUrl == null || manifestUrl.isBlank()) {
@@ -117,7 +123,7 @@ final class PackService {
                 progress.accept(new Progress(at, "[KEEP] " + relative));
                 continue;
             }
-            if (Files.isRegularFile(target) && !expected.isBlank() && expected.equals(sha256(target))) {
+            if (Files.isRegularFile(target) && !expected.isBlank() && expected.equals(HashCache.shared().sha256(target, trustStamps))) {
                 verified++;
                 progress.accept(new Progress(at, "[OK] " + relative));
                 continue;
@@ -179,6 +185,7 @@ final class PackService {
                 }
             }
         }
+        HashCache.shared().save();
         checkCancel(cancel);
         progress.accept(new Progress(1, failed == 0 ? "PACKAGE VERIFIED" : "PACKAGE HAS " + failed + " ERRORS"));
         if (failed == 0) writeInstallState(version, cachedManifest, total);
@@ -329,6 +336,7 @@ final class PackService {
             checkCancel(cancel); // abortDownload ends the stream early; that is a cancel, not a short file
             if (!expectedSha256.equalsIgnoreCase(HexFormat.of().formatHex(digest.digest()))) throw new IOException("SHA-256 mismatch");
             Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            HashCache.shared().remember(target, "SHA-256", expectedSha256);
         } finally {
             Files.deleteIfExists(temp);
         }

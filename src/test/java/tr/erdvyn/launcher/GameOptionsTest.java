@@ -40,4 +40,20 @@ final class GameOptionsTest {
         assertTrue(saved.contains("customPlayerSetting:kept"));
         assertEquals(29, new GameOptions(gameDirectory).renderDistance());
     }
+
+    @Test
+    void changesMadeByTheGameAfterLoadingSurviveALauncherEdit() throws Exception {
+        Path options = gameDirectory.resolve("options.txt");
+        Files.writeString(options, "renderDistance:12\nkey_key.jump:key.keyboard.space\n");
+        GameOptions values = new GameOptions(gameDirectory);
+
+        // Minecraft rewrites the file on exit while the launcher still holds its earlier copy.
+        Files.writeString(options, "renderDistance:12\nkey_key.jump:key.keyboard.j\nlang:tr_tr\n");
+        values.setRenderDistance(20);
+
+        String saved = Files.readString(options);
+        assertTrue(saved.contains("renderDistance:20"));
+        assertTrue(saved.contains("key_key.jump:key.keyboard.j"));
+        assertTrue(saved.contains("lang:tr_tr"));
+    }
 }
