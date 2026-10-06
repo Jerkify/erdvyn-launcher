@@ -49,6 +49,8 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
+; Tells Explorer to refresh icons after install: otherwise Start and search keep showing the previous version's icon.
+ChangesAssociations=yes
 VersionInfoCompany=Erdvyn
 VersionInfoDescription=Erdvyn Launcher Setup
 VersionInfoProductName=Erdvyn Launcher
