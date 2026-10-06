@@ -10,7 +10,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 
 /**
  * Synthesised UI sounds on one long-lived audio line fed by one daemon thread. Opening a line per click took
- * 50-100 ms and could fail when clicks overlapped; the line now opens once and stays open until shutdown.
+ * 50-100 ms and could fail when clicks overlapped; the line now opens once and stays open until shutdown, but it is
+ * stopped (after a buffer of silence) whenever no sound is waiting, so it never replays stale audio while idle.
  * Waveforms are rendered once per pitch and reused.
  */
 final class UiSound {
@@ -60,9 +61,18 @@ final class UiSound {
                 if (line == null) {
                     line = AudioSystem.getSourceDataLine(FORMAT);
                     line.open(FORMAT, 4096); // ~90 ms buffer: short enough that a click lands with the press
-                    line.start();
                 }
+                line.start(); // no-op while it runs
                 line.write(pcm, 0, pcm.length);
+                // Idle: on Windows the JDK silences a starved line only every 400 ms, so the ~90 ms ring buffer
+                // replayed each sound three or four times ("tick-tick" like a heartbeat). Fill it with silence,
+                // let it play out and stop the line until the next sound.
+                if (queue.isEmpty()) {
+                    byte[] silence = new byte[line.getBufferSize()];
+                    line.write(silence, 0, silence.length);
+                    line.drain();
+                    line.stop();
+                }
             }
         } catch (Exception ignored) {
             // No audio device: the launcher stays silent rather than failing.
