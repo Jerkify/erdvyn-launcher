@@ -1,5 +1,4 @@
 param(
-    [switch]$SkipVideos,
     [Parameter(Mandatory=$true)][string]$Version,
     [string]$ReleaseNotes = ''
 )
@@ -39,26 +38,13 @@ try {
     & "$javaRoot\bin\java.exe" '-Djava.awt.headless=true' -cp (Join-Path $work 'icon-tool') IconGenerator $iconPng $iconIco
     if($LASTEXITCODE -ne 0){throw 'Icon generation failed'}
     if(Test-Path -LiteralPath $runtime){Remove-Item -LiteralPath $runtime -Recurse -Force}
-    $modules=((Get-ChildItem -LiteralPath "$javaRoot\jmods" -Filter '*.jmod' -File | ForEach-Object BaseName) + @('javafx.base','javafx.graphics','javafx.media','javafx.swing')) -join ','
-    & "$javaRoot\bin\jlink.exe" --module-path "$javaRoot\jmods;$input" --add-modules $modules --strip-debug --no-header-files --no-man-pages --compress zip-6 --output $runtime
+    $modules=(Get-ChildItem -LiteralPath "$javaRoot\jmods" -Filter '*.jmod' -File | ForEach-Object BaseName) -join ','
+    & "$javaRoot\bin\jlink.exe" --module-path "$javaRoot\jmods" --add-modules $modules --strip-debug --no-header-files --no-man-pages --compress zip-6 --output $runtime
     if($LASTEXITCODE -ne 0){throw 'Runtime image build failed'}
     $appImage=Join-Path $release 'Erdvyn Launcher'
     if(Test-Path -LiteralPath $appImage){Remove-Item -LiteralPath $appImage -Recurse -Force}
-    & "$javaRoot\bin\jpackage.exe" --type app-image --dest $release --input $input --name 'Erdvyn Launcher' --main-jar $mainJar.Name --main-class 'tr.erdvyn.launcher.ErdvynLauncher' --app-version $Version --vendor 'Erdvyn' --description 'Erdvyn: The Frontier Launcher' --icon $iconIco --runtime-image $runtime --java-options '-Dprism.order=d3d,sw'
+    & "$javaRoot\bin\jpackage.exe" --type app-image --dest $release --input $input --name 'Erdvyn Launcher' --main-jar $mainJar.Name --main-class 'tr.erdvyn.launcher.ErdvynLauncher' --app-version $Version --vendor 'Erdvyn' --description 'Erdvyn: The Frontier Launcher' --icon $iconIco --runtime-image $runtime
     if($LASTEXITCODE -ne 0){throw 'Application image build failed'}
-    if(-not $SkipVideos){
-        $ffmpeg=Get-ChildItem -LiteralPath "$env:USERPROFILE\Downloads\ffmpeg-master-latest-win64-gpl-shared" -Recurse -Filter ffmpeg.exe | Select-Object -First 1 -ExpandProperty FullName
-        $source=Join-Path $env:USERPROFILE 'Videos\ErdvynLauncher'
-        $videoDest=Join-Path $appImage 'videos'
-        New-Item -ItemType Directory -Force -Path $videoDest | Out-Null
-        if($ffmpeg -and (Test-Path -LiteralPath $source)){
-            Get-ChildItem -LiteralPath $source -Filter 'erdvyn-*.mp4' | Sort-Object Name | ForEach-Object {
-                $target=Join-Path $videoDest $_.Name
-                & $ffmpeg -hide_banner -loglevel error -y -i $_.FullName -t 45 -vf 'scale=720:378:force_original_aspect_ratio=increase,crop=720:378' -an -c:v libx264 -preset veryfast -crf 32 -movflags +faststart $target
-                if($LASTEXITCODE -ne 0){throw "Video compression failed: $($_.Name)"}
-            }
-        }
-    }
     & (Join-Path $PSScriptRoot 'build-installer.ps1') -AppImage $appImage -Version $Version -ReleaseNotes $ReleaseNotes
     if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
     Write-Host "RELEASE=$appImage"

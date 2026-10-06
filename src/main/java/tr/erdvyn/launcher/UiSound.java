@@ -19,6 +19,7 @@ final class UiSound {
     private final LinkedBlockingQueue<byte[]> queue = new LinkedBlockingQueue<>(8);
     private final Map<String, byte[]> rendered = new ConcurrentHashMap<>();
     private volatile boolean running = true;
+    private volatile double volume = 1;
 
     UiSound() {
         Thread worker = new Thread(this::run, "erdvyn-ui-sound");
@@ -32,8 +33,23 @@ final class UiSound {
     void boot(int kind) { offer(rendered.computeIfAbsent("b" + kind, k -> renderBoot(kind))); }
 
     void shutdown() { running = false; queue.clear(); queue.offer(new byte[0]); }
+    /** 0 silences the clicks, 1 is full level. */
+    void setVolume(double value) { volume = Math.max(0, Math.min(1, value)); }
+    double volume() { return volume; }
 
-    private void offer(byte[] pcm) { if (running) queue.offer(pcm); } // a full queue drops the click instead of lagging behind the pointer
+    private void offer(byte[] pcm) {
+        double level = volume;
+        if (!running || level <= .001) return;
+        if (level < .999) { // scale a copy: the rendered waveforms are shared
+            byte[] scaled = new byte[pcm.length];
+            for (int i = 0; i + 1 < pcm.length; i += 2) {
+                int sample = (int) Math.round((short) (pcm[i] & 255 | pcm[i + 1] << 8) * level);
+                scaled[i] = (byte) sample; scaled[i + 1] = (byte) (sample >> 8);
+            }
+            pcm = scaled;
+        }
+        queue.offer(pcm); // a full queue drops the click instead of lagging behind the pointer
+    }
 
     private void run() {
         SourceDataLine line = null;

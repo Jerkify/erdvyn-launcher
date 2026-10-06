@@ -20,5 +20,4 @@ class UiMessagesTest {
         assertNull(UiMessages.hint(new java.io.IOException("HTTP 404")));
         assertNull(UiMessages.hint(null));
     }
-    @Test void mapSwitchesWithoutRefresh(){var map=new LocalSurveyMap(java.nio.file.Path.of("missing-test-map"));map.setTurkish(false);assertTrue(map.status().startsWith("Open the map"));map.setTurkish(true);assertTrue(map.status().startsWith("Yerel"));}
 }

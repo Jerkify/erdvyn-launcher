@@ -40,7 +40,7 @@ jobs:
         run: choco install innosetup --version 6.7.1 --yes --no-progress
       - name: package
         shell: pwsh
-        run: .\tools\build-release.ps1 -SkipVideos -Version $env:RELEASE_VERSION
+        run: .\tools\build-release.ps1 -Version $env:RELEASE_VERSION
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: erdvyn-launcher-${{ env.RELEASE_VERSION }}

@@ -1,11 +1,10 @@
 plugins {
     id 'java'
     id 'application'
-    id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
 group = 'tr.erdvyn'
-version = providers.environmentVariable('RELEASE_VERSION').orElse('2.2.0').get()
+version = providers.environmentVariable('RELEASE_VERSION').orElse('2.2.1').get()
 
 repositories { mavenCentral() }
 
@@ -25,7 +24,6 @@ java {
 
 application {
     mainClass = 'tr.erdvyn.launcher.ErdvynLauncher'
-    applicationDefaultJvmArgs = ['-Dprism.order=d3d,sw']
 }
 
 processResources {
@@ -82,11 +80,6 @@ tasks.register('apiTicketProbe', JavaExec) {
     classpath = files(layout.buildDirectory.dir('api-probe-classes')) + sourceSets.main.runtimeClasspath
     mainClass = 'tr.erdvyn.launcher.ApiTicketProbe'
     args project.findProperty('manifestSha') ?: '', project.findProperty('ticketOutput') ?: ''
-}
-
-javafx {
-    version = '21.0.7'
-    modules = ['javafx.graphics', 'javafx.media', 'javafx.swing']
 }
 
 jar {

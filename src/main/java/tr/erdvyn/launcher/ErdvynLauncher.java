@@ -2,21 +2,6 @@ package tr.erdvyn.launcher;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
-import javafx.animation.AnimationTimer;
-import javafx.animation.PauseTransition;
-import javafx.application.Platform;
-import javafx.embed.swing.JFXPanel;
-import javafx.embed.swing.SwingFXUtils;
-import javafx.geometry.Rectangle2D;
-import javafx.scene.Group;
-import javafx.scene.Scene;
-import javafx.scene.image.WritableImage;
-import javafx.scene.layout.StackPane;
-import javafx.scene.media.Media;
-import javafx.scene.media.MediaPlayer;
-import javafx.scene.media.MediaView;
-import javafx.scene.effect.ColorAdjust;
-import javafx.util.Duration;
 import java.awt.*;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.*;
@@ -75,7 +60,7 @@ public final class ErdvynLauncher {
         String capturePath = requestedCapture, selfTestPath = requestedSelfTest, initialPage=requestedPage,initialWindow=requestedWindow;boolean initialBoot=requestedBoot,initialLaunchPreview=requestedLaunchPreview,initialCrash=requestedCrash,initialSignIn=requestedSignIn,initialSample=requestedSample;int captureDelayMs=requestedCaptureDelay;
         EventQueue.invokeLater(() -> {
             LauncherFrame frame = new LauncherFrame();SingleInstance.frame=frame;
-            if(initialWindow!=null)try{String[] size=initialWindow.toLowerCase(Locale.ROOT).split("x");frame.setSize(Math.max(1040,Integer.parseInt(size[0])),Math.max(640,Integer.parseInt(size[1])));frame.setLocationRelativeTo(null);frame.layoutLayers();}catch(Exception ignored){}
+            if(initialWindow!=null)try{String[] size=initialWindow.toLowerCase(Locale.ROOT).split("x");frame.setSize(Math.max(1040,Integer.parseInt(size[0])),Math.max(640,Integer.parseInt(size[1])));frame.setLocationRelativeTo(null);frame.validate();}catch(Exception ignored){}
             // UI tests (captures, self-test) paint offscreen buffers: keep the window off-screen, unfocused and out of the taskbar.
             if(uiTest()){frame.setType(Window.Type.UTILITY);frame.setAutoRequestFocus(false);frame.setFocusableWindowState(false);frame.setLocation(-32000,-32000);}
             frame.setVisible(true);
@@ -144,8 +129,6 @@ public final class ErdvynLauncher {
     @SuppressWarnings("serial")
     static final class LauncherFrame extends JFrame {
         final LauncherCanvas canvas;
-        final VideoBackdrop video;
-        final JLayeredPane layers = new JLayeredPane();
         private final AtomicBoolean shuttingDown = new AtomicBoolean();
 
         LauncherFrame() {
@@ -159,11 +142,8 @@ public final class ErdvynLauncher {
             setMinimumSize(new Dimension(Math.min(1040,usable.width),Math.min(640,usable.height)));
             Rectangle saved=savedBounds();
             if(saved!=null)setBounds(saved);else{setSize(Math.min(1242,usable.width),Math.min(768,usable.height));setLocationRelativeTo(null);}
-            video = new VideoBackdrop();
-            canvas = new LauncherCanvas(this,video);
-            layers.setLayout(null);layers.add(video.panel,JLayeredPane.DEFAULT_LAYER);layers.add(canvas,JLayeredPane.PALETTE_LAYER);setContentPane(layers);
-            addComponentListener(new ComponentAdapter(){@Override public void componentResized(ComponentEvent e){layoutLayers();}@Override public void componentShown(ComponentEvent e){layoutLayers();}});
-            layoutLayers();SwingUtilities.invokeLater(this::layoutLayers);
+            canvas = new LauncherCanvas(this);
+            setContentPane(canvas);
             addWindowListener(new WindowAdapter() {
                 @Override public void windowClosing(WindowEvent event) { canvas.powerOffAndExit(); }
             });
@@ -173,15 +153,13 @@ public final class ErdvynLauncher {
             if (!shuttingDown.compareAndSet(false, true)) return;
             if((getExtendedState()&MAXIMIZED_BOTH)==0){Preferences p=prefs(LauncherFrame.class);Rectangle b=getBounds();p.putInt("windowX",b.x);p.putInt("windowY",b.y);p.putInt("windowW",b.width);p.putInt("windowH",b.height);}
             canvas.shutdown();
-            video.shutdown();
             setVisible(false);
             dispose();
-            Platform.exit();
             System.exit(0);
         }
 
         /** Minecraft owns the screen now: hide (not dispose) so a crash can bring the launcher back with its report. */
-        void hideWhileGameRuns(){Platform.setImplicitExit(false);canvas.suspendForGame();setVisible(false);}
+        void hideWhileGameRuns(){canvas.suspendForGame();setVisible(false);}
         void showAfterGame(){setVisible(true);if((getExtendedState()&ICONIFIED)!=0)setExtendedState(getExtendedState()&~ICONIFIED);toFront();canvas.requestFocusInWindow();}
         void toggleMaximized(){setExtendedState((getExtendedState()&MAXIMIZED_BOTH)!=0?NORMAL:MAXIMIZED_BOTH);}
         /** A second launcher start: come forward, unless Minecraft owns the screen (then the window stays hidden on purpose). */
@@ -202,66 +180,6 @@ public final class ErdvynLauncher {
             for(int i=0,count=data.getShort(4);i<count;i++){int size=data.getInt(6+16*i+8),offset=data.getInt(6+16*i+12);images.add(ImageIO.read(new java.io.ByteArrayInputStream(ico,offset,size)));}
             return images;
         }
-
-        private void layoutLayers(){int w=Math.max(1,getContentPane().getWidth()>0?getContentPane().getWidth():getWidth()),h=Math.max(1,getContentPane().getHeight()>0?getContentPane().getHeight():getHeight());Rectangle feed=LauncherCanvas.cameraBounds(w,h);video.panel.setBounds(feed);canvas.setBounds(0,0,w,h);video.resize(feed.width,feed.height);layers.revalidate();layers.repaint();}
-    }
-
-    static final class VideoBackdrop {
-        private static final Path PREPARED=Path.of(System.getProperty("user.home"),"Videos","ErdvynLauncher");
-        private static final int MAX_VIDEOS=16;
-        final JFXPanel panel=new JFXPanel();private final Preferences prefs=prefs(VideoBackdrop.class);
-        private MediaPlayer player;private MediaView view;private AnimationTimer volumeTimer;private volatile boolean ready;private volatile double volume;private volatile boolean muted,uiGate,paused;private int targetW=1440,targetH=900;private Path selected;
-        private final Set<Path> attempted=new HashSet<>();
-
-        VideoBackdrop(){panel.setOpaque(true);panel.setBackground(new Color(4,6,9));volume=Math.max(0,Math.min(1,prefs.getDouble("videoVolume",.16)));muted=prefs.getBoolean("videoMuted",false);selected=chooseVideo();Platform.runLater(this::open);}
-        boolean isReady(){return ready;}double volume(){return volume;}boolean isMuted(){return muted;}Path selected(){return selected;}
-        void setUiGate(boolean active){if(uiGate==active)return;uiGate=active;applyVolume();}
-        List<Path> media(){
-            LinkedHashSet<Path> roots=new LinkedHashSet<>();String appPath=System.getProperty("jpackage.app-path","");
-            if(!appPath.isBlank()){Path parent=Path.of(appPath).toAbsolutePath().getParent();if(parent!=null)roots.add(parent.resolve("videos"));}
-            Path runtimeParent=Path.of(System.getProperty("java.home")).toAbsolutePath().getParent();if(runtimeParent!=null)roots.add(runtimeParent.resolve("videos"));
-            roots.add(Path.of(System.getProperty("user.dir")).toAbsolutePath().resolve("videos"));roots.add(PREPARED);
-            for(Path root:roots){List<Path> found=numberedVideos(root);if(!found.isEmpty())return found;}
-            return List.of();
-        }
-        /** Stops decoding (and its audio) while the feed is hidden, minimized or Minecraft is loading. */
-        void setPaused(boolean value){if(paused==value)return;paused=value;Platform.runLater(()->{if(player!=null&&ready){if(value)player.pause();else player.play();}});}
-        private static List<Path> numberedVideos(Path root){List<Path> found=new ArrayList<>();for(int i=1;i<=MAX_VIDEOS;i++){Path file=root.resolve(String.format(Locale.ROOT,"erdvyn-%02d.mp4",i));if(Files.isRegularFile(file))found.add(file);}return found;}
-        void resize(int w,int h){targetW=Math.max(1,w);targetH=Math.max(1,h);Platform.runLater(this::applyViewport);}
-        void toggleMute(){muted=!muted;prefs.putBoolean("videoMuted",muted);applyVolume();}
-        void setVolume(double value){volume=Math.max(0,Math.min(1,value));if(volume>.001)muted=false;prefs.putDouble("videoVolume",volume);prefs.putBoolean("videoMuted",muted);applyVolume();}
-        void switchToDifferentVideo(){List<Path> available=media();if(available.isEmpty())return;Path current=selected;List<Path> choices=available.stream().filter(path->!path.equals(current)).toList();Path next=(choices.isEmpty()?available:choices).get(new Random().nextInt((choices.isEmpty()?available:choices).size()));selected=next;prefs.put("lastVideo",next.toString());ready=false;Platform.runLater(()->{if(volumeTimer!=null){volumeTimer.stop();volumeTimer=null;}if(player!=null){player.stop();player.dispose();player=null;}open();});}
-
-        private Path chooseVideo(){List<Path> available=media();if(available.isEmpty())return null;String last=prefs.get("lastVideo","");List<Path> choices=available.stream().filter(path->!path.toString().equals(last)).toList();if(choices.isEmpty())choices=available;Path choice=choices.get(new Random().nextInt(choices.size()));prefs.put("lastVideo",choice.toString());return choice;}
-        private void open(){
-            if(selected==null)return;
-            try{
-                attempted.add(selected);
-                Media media=new Media(selected.toUri().toString());player=new MediaPlayer(media);view=new MediaView(player);view.setSmooth(true);view.setPreserveRatio(false);
-                // A cool broadcast grade under the cyan HOME phosphor (the old sepia belonged to the all-amber theme).
-                ColorAdjust cameraGrade=new ColorAdjust();cameraGrade.setSaturation(-.22);cameraGrade.setContrast(.1);cameraGrade.setBrightness(-.02);cameraGrade.setHue(.02);view.setEffect(cameraGrade);
-                StackPane root=new StackPane(view);root.setStyle("-fx-background-color: #04060a;");panel.setScene(new Scene(root,javafx.scene.paint.Color.rgb(4,6,9)));
-                player.setCycleCount(MediaPlayer.INDEFINITE);player.setOnReady(()->{ready=true;applyViewport();applyVolume();if(!paused)player.play();});player.setOnRepeat(()->{if(player!=null){player.seek(Duration.ZERO);if(!paused)player.play();}});player.setOnStalled(()->{if(player!=null&&!paused)player.play();});
-                player.setOnError(()->{ready=false;System.err.println("Video playback: "+player.getError());tryNextVideo();});
-                volumeTimer=new AnimationTimer(){@Override public void handle(long now){if(player==null||!ready)return;Duration duration=player.getTotalDuration(),at=player.getCurrentTime();if(duration==null||duration.isUnknown()||duration.isIndefinite())return;double edge=.38,seconds=at.toSeconds(),remaining=duration.toSeconds()-seconds,fade=Math.min(1,Math.min(seconds/edge,remaining/edge));player.setVolume((muted||!uiGate?0:volume)*Math.max(0,fade));}};volumeTimer.start();
-            }catch(Exception ex){ready=false;System.err.println("Video init: "+ex.getMessage());tryNextVideo();}
-        }
-        private void tryNextVideo(){if(player!=null){player.dispose();player=null;}Path next=media().stream().filter(path->!attempted.contains(path)).findFirst().orElse(null);if(next!=null){selected=next;prefs.put("lastVideo",next.toString());Platform.runLater(this::open);}}
-        private void applyVolume(){Platform.runLater(()->{if(player!=null)player.setVolume(muted||!uiGate?0:volume);});}
-        private void applyViewport(){if(view==null||view.getMediaPlayer()==null)return;Media media=view.getMediaPlayer().getMedia();double sw=media.getWidth(),sh=media.getHeight();if(sw<=0||sh<=0)return;double target=targetW/(double)targetH,source=sw/sh,x=0,y=0,cw=sw,ch=sh;if(source>target){cw=sh*target;x=(sw-cw)/2;}else{ch=sw/target;y=(sh-ch)/2;}view.setViewport(new Rectangle2D(x,y,cw,ch));view.setFitWidth(targetW);view.setFitHeight(targetH);}
-
-        void shutdown(){
-            ready=false;uiGate=false;
-            Runnable cleanup=()->{if(volumeTimer!=null){volumeTimer.stop();volumeTimer=null;}if(player!=null){player.stop();player.dispose();player=null;}view=null;panel.setScene(null);};
-            if(Platform.isFxApplicationThread())cleanup.run();else Platform.runLater(cleanup);
-        }
-
-        void requestThumbnail(int mediaIndex,Consumer<BufferedImage> consumer){List<Path> available=media();if(available.isEmpty())return;Path source=available.get(Math.floorMod(mediaIndex,available.size()));Platform.runLater(()->createThumbnail(source,consumer));}
-        private void createThumbnail(Path source,Consumer<BufferedImage> consumer){
-            try{Media media=new Media(source.toUri().toString());MediaPlayer thumbPlayer=new MediaPlayer(media);MediaView thumbView=new MediaView(thumbPlayer);thumbView.setFitWidth(560);thumbView.setFitHeight(315);thumbView.setPreserveRatio(false);Group group=new Group(thumbView);new Scene(group,560,315,javafx.scene.paint.Color.BLACK);thumbPlayer.setMute(true);
-                thumbPlayer.setOnReady(()->{Duration seek=Duration.seconds(Math.min(6,Math.max(1,thumbPlayer.getTotalDuration().toSeconds()*.18)));thumbPlayer.seek(seek);PauseTransition pause=new PauseTransition(Duration.millis(380));pause.setOnFinished(event->{WritableImage image=new WritableImage(560,315);thumbView.snapshot(null,image);BufferedImage converted=SwingFXUtils.fromFXImage(image,null);thumbPlayer.dispose();SwingUtilities.invokeLater(()->consumer.accept(converted));});pause.play();});
-            }catch(Exception ignored){}
-        }
     }
 
     @SuppressWarnings("serial")
@@ -274,11 +192,10 @@ public final class ErdvynLauncher {
         private static final double BOOT_SECONDS = 2.7;
         private static final String[] BOOT_LOGS={
                 "> POWERING ERDVYN CONTROL TERMINAL","> MEMORY MAP .................... OK","> CRT PHOSPHOR LAYER ............ READY","> LOADING PIXEL GLYPH ROM",
-                "[OK] PxPlus IBM VGA8","[OK] phosphor color table","> MOUNTING USER PREFERENCES","> INITIALIZING VIDEO BUS","[OK] camera playlist / 07",
+                "[OK] PxPlus IBM VGA8","[OK] phosphor color table","> MOUNTING USER PREFERENCES","> PROJECTING PLANET ATLAS","> READING LOCAL SURVEY",
                 "> INITIALIZING AUDIO DEVICE","[OK] mechanical UI channel","> STARTING NETWORK MONITOR","> REGISTERING PANEL MODULES","> SYNCHRONIZING SYSTEM CLOCK","> UI BUS HANDOFF"};
 
         private final LauncherFrame frame;
-        private final VideoBackdrop video;
         private final Preferences preferences = prefs(ErdvynLauncher.class);
         private final javax.swing.Timer timer = new javax.swing.Timer(16, this);
         private final Random random = new Random(72491);
@@ -308,7 +225,12 @@ public final class ErdvynLauncher {
         private final PackService packService = new PackService();
         private final MinecraftSkinService skinService = new MinecraftSkinService();
         private final LauncherUpdateService launcherUpdateService = new LauncherUpdateService();
-        private final LocalSurveyMap localSurvey=new LocalSurveyMap();
+        private final PlanetSurvey survey=new PlanetSurvey();
+        /** HOME's hologram turns on its own; the MAP page's globe is the player's to turn. */
+        private final PlanetGlobe homeGlobe=new PlanetGlobe(PlanetGlobe.Style.HOLO),mapGlobe=new PlanetGlobe(PlanetGlobe.Style.SURVEY);
+        private final Rectangle homeGlobeBounds=new Rectangle(),mapViewBounds=new Rectangle(),surveyWorldBounds=new Rectangle(),mapCentreBounds=new Rectangle(),mapZoomInBounds=new Rectangle(),mapZoomOutBounds=new Rectangle();
+        private final Rectangle[] waypointBounds=new Rectangle[12];
+        private Point globeDragAt;private int hoverWaypoint=-1,waypointScroll;private String mapCentredOn="";private double mapHoverSince;
         private final UiMessages messages=new UiMessages();
         private final List<ChatLine> chatLines = new ArrayList<>();
         private final List<String> onlinePlayers = new ArrayList<>();
@@ -336,7 +258,7 @@ public final class ErdvynLauncher {
         private boolean profileOpen, autoUpdate = true, autoConnect = true;
         // Destructive admin buttons need a second click within a few seconds.
         private String pendingConfirm="";private double pendingConfirmUntil;
-        private boolean volumeDragging, packVerifying, chatFocused,bootActive,bootCompleteSound,launcherReady=true,cameraVideoSwitched;
+        private boolean volumeDragging, packVerifying, chatFocused,bootActive,bootCompleteSound,launcherReady=true;
         private boolean accountLoginInProgress,launchAfterLogin,gameLaunching,launchOverlayActive,launchFailed,newsComposeOpen,newsPublishInProgress,notificationsOpen,packInstalled;
         private volatile boolean gameReady; // render handoff done: from here the launch can no longer be cancelled
         private volatile Thread loginThread,launchThread;private volatile Process launchingGame;
@@ -349,7 +271,7 @@ public final class ErdvynLauncher {
         private LauncherUpdateService.Update launcherUpdate;
         private Path launcherInstaller;
         private final long startNanos=System.nanoTime();private long lastTickNanos;
-        private double time, dt=1/60.0, pageTransition = 1, opening, sidebarExpand, volumeReveal,pressDepth,cameraGlitchStart=-10,cameraGlitchEnd=-10,nextCameraGlitchAt=14,launchDisplayedProgress,launchTargetProgress;
+        private double time, dt=1/60.0, pageTransition = 1, opening, sidebarExpand, volumeReveal,pressDepth,launchDisplayedProgress,launchTargetProgress,homeGlobeOnAt=-10;
         private double bootStartedAt,powerOff=-1,wordmarkGlitchAt=4,articleOpenedAt,pageSwitchedAt=-10;
         private String pressedControl="";
         private double packProgress;
@@ -374,9 +296,12 @@ public final class ErdvynLauncher {
         private String wrapKey="";private List<String> wrapLines=List.of(); // the open article's wrapped body, re-wrapped only when it or the width changes
         private String previewKey="";private List<String> previewLines=List.of();private long previewId=-1;private double previewSince;
 
-        LauncherCanvas(LauncherFrame frame,VideoBackdrop video) {
+        LauncherCanvas(LauncherFrame frame) {
             this.frame = frame;
-            this.video=video;setOpaque(false);
+            setOpaque(true);
+            PlanetGlobe.preload();
+            for(int i=0;i<waypointBounds.length;i++)waypointBounds[i]=new Rectangle();
+            sound.setVolume(preferences.getBoolean("uiMuted",false)?0:preferences.getDouble("uiVolume",.8));
             setCursor(Cursor.getPredefinedCursor(Cursor.DEFAULT_CURSOR));
             setFocusable(true);setFocusTraversalKeysEnabled(false); // Tab must reach keyPressed to switch admin/news fields
             language = "EN".equalsIgnoreCase(preferences.get("language", "TR")) ? Language.EN : Language.TR;
@@ -467,17 +392,11 @@ public final class ErdvynLauncher {
         }
 
         private void paintWorld(Graphics2D g,int w,int h) {
-            Shape oldClip=g.getClip();
-            if(page==Page.HOME&&video.isReady()&&!bootActive){
-                // The camera feed is the video panel underneath: leave its rectangle unpainted.
-                Area area=new Area(new Rectangle(0,0,w,h));area.subtract(new Area(cameraBounds(w,h)));g.clip(area);
-            }
             g.setColor(Retro.INK);g.fillRect(0,0,w,h);
             Retro.dots(g,w,h);
             double t=Retro.easeInOut(pageTransition);
             if(t<1)Retro.ambient(g,w,h,theme(previousPage).main,1-t);
             Retro.ambient(g,w,h,theme(page).main,t);
-            g.setClip(oldClip);
         }
 
         /** Static fills the picture for the first quarter of the switch, then thins out over the new page, with a rolling hold bar. */
@@ -544,12 +463,8 @@ public final class ErdvynLauncher {
             g.setPaint(new GradientPaint(0,roll-50,Retro.alpha(Color.WHITE,0),0,roll,Retro.alpha(Color.WHITE,9)));g.fillRect(0,roll-50,w,50);
             g.setPaint(new GradientPaint(0,roll,Retro.alpha(Color.WHITE,9),0,roll+50,Retro.alpha(Color.WHITE,0)));g.fillRect(0,roll,w,50);
             g.setPaint(old);
-            double glitch=cameraGlitchStrength();
-            if(glitch>0){int tears=1+(int)(glitch*3);for(int i=0;i<tears;i++){int gy=Math.floorMod((int)(time*211+i*193),Math.max(1,h));g.setColor(Retro.alpha(i%2==0?Retro.CYAN:Retro.RED,Math.min(70,12+(int)(glitch*54))));g.fillRect(0,gy,w,1+Math.floorMod(i+(int)(time*20),4));}if(glitch>.72&&((int)(time*17)&1)==0){g.setColor(new Color(0,0,0,38));g.fillRect(0,0,w,h);}}
         }
 
-        private double cameraGlitchStrength(){if(page!=Page.HOME||time<cameraGlitchStart||time>=cameraGlitchEnd)return 0;double p=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart),envelope;if(p<.12)envelope=p/.12;else if(p<.58)envelope=1;else{double recovery=(p-.58)/.42;envelope=Math.pow(1-recovery,1.65);}double analog=.92+.08*Math.abs(Math.sin(time*29));return Math.max(0,Math.min(1,envelope*analog));}
-        private void triggerCameraGlitch(double duration){cameraGlitchStart=time;cameraGlitchEnd=time+duration;cameraVideoSwitched=false;nextCameraGlitchAt=cameraGlitchEnd+20+random.nextDouble()*18;}
         /** The wordmark tears for a third of a second every few seconds. */
         private double wordmarkGlitch(){double p=time-wordmarkGlitchAt;if(p<0)return 0;if(p>.34){wordmarkGlitchAt=time+5+random.nextDouble()*7;return 0;}return Math.sin(p/.34*Math.PI);}
 
@@ -635,8 +550,8 @@ public final class ErdvynLauncher {
             g.setClip(clip);
             audioBounds.setBounds((SIDEBAR-38)/2,h-62,38,42);double ha=hover(audioBounds);
             int sliderLength=(int)(120*volumeReveal);
-            if(sliderLength>5){volumeBounds.setBounds(61,h-55,sliderLength+8,28);g.setColor(chrome.line);g.drawRect(61,h-55,sliderLength+6,22);Retro.blocks(g,65,h-50,sliderLength-2,12,Math.max(3,sliderLength/9),video.isMuted()?0:video.volume(),chrome.main);}else volumeBounds.setBounds(0,0,0,0);
-            paintSpeakerIcon(g,audioBounds.x+19,audioBounds.y+21,video.isMuted(),ha>.5?chrome.hot:QUIET,ha>.5);
+            if(sliderLength>5){volumeBounds.setBounds(61,h-55,sliderLength+8,28);g.setColor(chrome.line);g.drawRect(61,h-55,sliderLength+6,22);Retro.blocks(g,65,h-50,sliderLength-2,12,Math.max(3,sliderLength/9),sound.volume(),chrome.main);}else volumeBounds.setBounds(0,0,0,0);
+            paintSpeakerIcon(g,audioBounds.x+19,audioBounds.y+21,sound.volume()<=.001,ha>.5?chrome.hot:QUIET,ha>.5);
             String version=(sidebarExpand>.45?"LAUNCHER ":"v")+LauncherUpdateService.CURRENT_VERSION;
             Retro.plain(g,version,F16,sidebarExpand>.45?14:Math.max(4,(SIDEBAR-Retro.width(F16,version))/2),h-74,STEEL);
         }
@@ -698,11 +613,11 @@ public final class ErdvynLauncher {
         // ================================================================ HOME
 
         /**
-         * HOME is a broadcast desk: brand and system profile on the left, the camera monitor filling the right, and a
+         * HOME is a broadcast desk: brand and system profile on the left, the planet monitor filling the right, and a
          * lower third across the bottom with PLAY (bottom left, where launchers put it) beside the live server readouts.
          */
         private void paintHome(Graphics2D g) {
-            Retro.Theme t=Retro.HOME;int w=getWidth(),h=getHeight(),x=contentLeft(),top=100,leftW=homeLeftW(w),band=lowerThirdH(h),bandY=contentBottom()-band,upperBottom=bandY-18;Rectangle feed=cameraBounds(w,h);
+            Retro.Theme t=Retro.HOME;int w=getWidth(),h=getHeight(),x=contentLeft(),top=100,leftW=homeLeftW(w),band=lowerThirdH(h),bandY=contentBottom()-band,upperBottom=bandY-18;Rectangle feed=monitorBounds(w,h);
             double r0=reveal(0);
             ErdvynMark.paint(g,x,top-4,64,time);
             int wx=x+80;
@@ -750,7 +665,7 @@ public final class ErdvynLauncher {
                 while(path.length()>8&&Retro.width(F16,path)>max)path="..."+path.substring(4);
                 Retro.plain(g,label,F16,x+6,upperBottom-7,STEEL);Retro.plain(g,path,F16,x+6+Retro.width(F16,label),upperBottom-7,hp>.5?t.hot:QUIET);
             }else instancePathBounds.setBounds(0,0,0,0);
-            paintCameraFeedOverlay(g,feed,t);
+            paintGlobeMonitor(g,feed,t);
             paintLowerThird(g,t,x,bandY,w-28-x,band);
         }
         private static String pct(double value){return String.format(Locale.ROOT,"%d%%",(int)Math.round(Retro.clamp01(value)*100));}
@@ -771,24 +686,58 @@ public final class ErdvynLauncher {
             Retro.text(g,label,f,tx,ty,ink,.8);
         }
 
-        private void paintCameraFeedOverlay(Graphics2D g,Rectangle feed,Retro.Theme t){
-            int left=feed.x,top=feed.y,right=feed.x+feed.width,bottom=feed.y+feed.height;double r=reveal(2);
-            g.setColor(new Color(8,40,52,30));g.fillRect(left,top,feed.width,feed.height);
-            int sweepY=top+(int)((time*43)%Math.max(1,feed.height));g.setColor(Retro.alpha(t.hot,22));g.fillRect(left,sweepY,feed.width,2);
-            Retro.frame(g,left-1,top-1,feed.width+2,feed.height+2,t,r,null);g.setColor(Retro.alpha(t.main,40));g.drawRect(left+4,top+4,feed.width-9,feed.height-9);
-            int cameraNo=1+Math.floorMod(video.selected()==null?7:video.selected().hashCode(),12);
-            Retro.text(g,String.format(Locale.ROOT,"OH-CAM %02d",cameraNo),F16,left+14,top+26,Retro.PAPER,.5);
-            Retro.led(g,left+19,top+40,Retro.RED,true,time,true);Retro.plain(g,"REC",F16,left+29,top+46,Retro.PAPER);
-            int totalFrames=(int)(time*25),frames=totalFrames%25,seconds=(totalFrames/25)%60,minutes=(totalFrames/1500)%60,hours=(totalFrames/90000)%24;
-            String code=String.format(Locale.ROOT,"%02d:%02d:%02d.%02d",hours,minutes,seconds,frames);int cw=Retro.segWidth(code,14);
-            g.setColor(Retro.alpha(Retro.INK,150));g.fillRect(right-cw-18,bottom-28,cw+10,22);Retro.seg7(g,code,right-cw-13,bottom-24,14,Retro.PAPER,time);
-            double glitch=cameraGlitchStrength();
-            if(glitch>0){
-                g.setColor(new Color(0,0,0,Math.min(178,42+(int)(glitch*126))));g.fillRect(left+5,top+5,feed.width-9,feed.height-9);
-                int bands=3+(int)(glitch*8);for(int i=0;i<bands;i++){int gy=top+Math.floorMod((int)(time*128+i*71),Math.max(1,feed.height)),gh=2+Math.floorMod(i*5+(int)(time*19),11);g.setColor(Retro.alpha(i%3==0?Retro.RED:i%3==1?Retro.CYAN:Retro.PAPER,Math.min(150,(int)(35+glitch*100))));g.fillRect(left+5,gy,feed.width-10,gh);}
-                double p=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);
-                if(p<.62&&Math.floorMod((int)(time*9),5)!=1){String lost=l("SİNYAL KAYIP","SIGNAL LOST");int tw=Retro.width(F32,lost),bx=left+(feed.width-tw)/2-22,by=top+feed.height/2-30;int a=Math.floorMod((int)(time*18),4)==0?150:235;g.setColor(new Color(4,6,9,a));g.fillRect(bx,by,tw+44,56);g.setColor(Retro.alpha(Retro.RED,a));g.drawRect(bx,by,tw+44,56);Retro.chroma(g,lost,F32,bx+22,by+40,Retro.alpha(Retro.PAPER,a),Retro.RED,2,glitch*.6,time,false);}
+        /**
+         * The HOME monitor: the planet as a two-phosphor hologram turning once every ninety seconds. The ground the
+         * player has surveyed glows orange over the cyan planet, with their waypoints and an orbiting station; the
+         * picture scans in when the channel comes up. A click opens the same view on the MAP channel.
+         */
+        private void paintGlobeMonitor(Graphics2D g,Rectangle m,Retro.Theme t){
+            int left=m.x,top=m.y,right=m.x+m.width,bottom=m.y+m.height;double r=reveal(2),on=Retro.clamp01((time-homeGlobeOnAt)/.9);
+            PlanetSurvey.Snapshot s=survey.current();
+            g.setColor(new Color(3,9,12));g.fillRect(left,top,m.width,m.height);
+            double radius=Math.min(m.width*.39,m.height*.42),cx=m.width*.5,cy=m.height*.52;int gx=left+(int)cx,gy=top+(int)cy;
+            homeGlobeBounds.setBounds(gx-(int)radius,gy-(int)radius,(int)(2*radius),(int)(2*radius));double hv=hover(homeGlobeBounds);
+            Shape clip=g.getClip();g.clipRect(left,top,m.width,(int)Math.ceil(m.height*Retro.easeOut(on)));
+            paintOrbit(g,gx,gy,radius,false,t);
+            homeGlobe.paint(g,left,top,m.width,m.height,cx,cy,radius*(.9+.1*Retro.easeOut(on)),s);
+            homeGlobe.paintGrid(g,Retro.alpha(t.main,(int)(40+30*hv)));homeGlobe.paintRim(g,Retro.mix(t.main,Color.WHITE,.3*hv));
+            double[] p=new double[3];
+            for(PlanetSurvey.Waypoint w:s.waypoints())if(homeGlobe.project(w.x(),w.z(),p)&&p[2]>.08){
+                int wx=(int)Math.round(p[0]),wy=(int)Math.round(p[1]);boolean blink=((int)(time*2.5+w.x())&1)==0;
+                g.setColor(w.death()?Retro.RED:blink?Retro.PAPER:t.data);g.fillRect(wx-1,wy-1,3,3);
             }
+            paintOrbit(g,gx,gy,radius,true,t);
+            g.setClip(clip);
+            if(on<1){int scan=top+(int)(m.height*Retro.easeOut(on));g.setColor(Retro.alpha(Color.WHITE,170));g.fillRect(left,scan,m.width,2);g.setColor(Retro.alpha(t.main,60));g.fillRect(left,scan+2,m.width,6);}
+            int sweepY=top+(int)((time*43)%Math.max(1,m.height));g.setColor(Retro.alpha(t.hot,16));g.fillRect(left,sweepY,m.width,2);
+            Retro.frame(g,left-1,top-1,m.width+2,m.height+2,t,r,null);g.setColor(Retro.alpha(t.main,40));g.drawRect(left+4,top+4,m.width-9,m.height-9);
+            Retro.text(g,"SAT-LINK // ERDVYN",F16,left+14,top+26,Retro.PAPER,.5);
+            boolean surveyed=!s.empty();Retro.led(g,left+19,top+40,surveyed?Retro.GREEN:Retro.YELLOW,true,time,!surveyed);
+            Retro.plain(g,surveyed?l("YEREL KEŞİF","LOCAL SURVEY"):l("KEŞİF YOK","NO SURVEY"),F16,left+29,top+46,surveyed?QUIET:Retro.YELLOW);
+            Retro.right(g,l("SEKTÖR","SECTOR"),F16,right-14,top+26,QUIET,0);
+            String sector=PlanetGlobe.sector(homeGlobe.yaw,PlanetSurvey.MIN+(homeGlobe.pitch/Math.PI+.5)*PlanetSurvey.SPAN).replace('B','b').replace('D','d');
+            Retro.seg7(g,sector,right-14-Retro.segWidth(sector,22),top+34,22,t.data,time);
+            if(m.height>=200){
+                Retro.plain(g,l("KEŞFEDİLEN","SURVEYED"),F16,left+14,bottom-42,QUIET);
+                String pct=String.format(Locale.ROOT,"%.2f",s.fraction()*100);int pw=Retro.seg7(g,pct,left+14,bottom-32,18,t.data,time);Retro.plain(g,"%",F16,left+20+pw,bottom-14,t.dataMuted);
+                String marks=String.format(Locale.ROOT,l("İŞARET %02d","WAYPOINTS %02d"),Math.min(99,s.waypoints().size()));
+                Retro.right(g,hv>.5?l("HARİTAYI AÇ >>","OPEN MAP >>"):marks,F16,right-14,bottom-14,hv>.5?t.hot:QUIET,0);
+            }
+        }
+        /** A station's orbit round the globe; the far half is drawn first so the globe hides it, the near half after. */
+        private void paintOrbit(Graphics2D g,int cx,int cy,double r,boolean front,Retro.Theme t){
+            double rx=r*1.4,ry=r*.3,a=time*.42;
+            java.awt.geom.AffineTransform old=g.getTransform();Object aa=g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);Stroke stroke=g.getStroke();
+            g.translate(cx,cy);g.rotate(Math.toRadians(-13));g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,RenderingHints.VALUE_ANTIALIAS_ON);g.setStroke(new BasicStroke(1.2f));
+            if(front){g.setColor(Retro.alpha(t.main,120));g.draw(new Arc2D.Double(-rx,-ry,2*rx,2*ry,180,180,Arc2D.OPEN));}
+            else{g.setColor(Retro.alpha(t.main,46));g.draw(new Ellipse2D.Double(-rx,-ry,2*rx,2*ry));}
+            double px=rx*Math.cos(a),py=ry*Math.sin(a);
+            if(front==(py>0)){
+                g.setColor(front?t.data:Retro.alpha(t.data,110));g.fill(new Rectangle2D.Double(px-3,py-3,6,6));
+                if(front){g.setColor(Retro.alpha(t.data,90));g.draw(new Ellipse2D.Double(px-7,py-7,14,14));}
+            }
+            g.setTransform(old);g.setStroke(stroke);g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,aa);
+            if(front&&py>0){java.awt.geom.Point2D at=new java.awt.geom.Point2D.Double(px,py);java.awt.geom.AffineTransform.getRotateInstance(Math.toRadians(-13)).transform(at,at);Retro.plain(g,"ORB-1",F16,cx+(int)at.getX()+10,cy+(int)at.getY()+5,Retro.alpha(t.data,200));}
         }
 
         /** The lower third: PLAY with its launch-bus line on the left, then a LIVE panel of LED readouts and the link monitor. */
@@ -1147,16 +1096,128 @@ public final class ErdvynLauncher {
 
         // ================================================================ MAP
 
+        /**
+         * The planet as an instrument: a globe to grab and turn (flicks keep turning, the wheel zooms toward the
+         * pointer down to the survey's own two-block detail, a double click flies there) beside the survey log: the
+         * share of the planet seen, the area walked and the waypoints, each a click away. All of it is read from this
+         * computer and never leaves it.
+         */
         private void paintWorldMap(Graphics2D g){
             Retro.Theme t=Retro.MAP;int x=contentLeft(),y=104;
-            sectionTitle(g,t,x,y,l("HOLOHARİTA // ARAZİ İZLEYİCİ","HOLOMAP // SURVEY MONITOR"),t("worldMap"));
-            int mapY=y+82,mapW=getWidth()-x-32,mapH=contentBottom()-mapY;
-            g.setFont(F16);localSurvey.setTurkish(language==Language.TR);localSurvey.setColors(Retro.alpha(t.main,190),t.data);localSurvey.paint(g,x,mapY,mapW,mapH);
-            // A survey sweep crosses the map left to right with a fading trail.
-            int sweep=x+(int)(((time*.12)%1)*mapW);Paint old=g.getPaint();
-            g.setPaint(new GradientPaint(sweep-90,0,Retro.alpha(t.main,0),sweep,0,Retro.alpha(t.main,46)));g.fillRect(Math.max(x,sweep-90),mapY+25,Math.min(90,sweep-x),mapH-49);g.setPaint(old);
-            g.setColor(Retro.alpha(t.hot,150));g.fillRect(sweep,mapY+25,1,mapH-49);
-            Retro.frame(g,x,mapY,mapW,mapH,t,reveal(1),null);
+            sectionTitle(g,t,x,y,l("GEZEGEN // KEŞİF İZLEYİCİ","PLANET // SURVEY MONITOR"),t("worldMap"));
+            int mapY=y+82,mapW=getWidth()-x-32,mapH=contentBottom()-mapY,sideW=Math.max(232,Math.min(300,mapW*27/100)),viewW=mapW-sideW-14;
+            PlanetSurvey.Snapshot s=survey.current();
+            mapViewBounds.setBounds(x,mapY,viewW,mapH);
+            paintGlobeView(g,t,s,x,mapY,viewW,mapH);
+            paintSurveyLog(g,t,s,x+viewW+14,mapY,sideW,mapH);
+        }
+        private void paintGlobeView(Graphics2D g,Retro.Theme t,PlanetSurvey.Snapshot s,int x,int y,int w,int h){
+            g.setColor(new Color(5,4,9));g.fillRect(x,y,w,h);
+            Shape clip=g.getClip();g.clipRect(x,y,w,h);
+            long seed=0x5EED;for(int i=0;i<110;i++){seed=seed*6364136223846793005L+1442695040888963407L;int sx=x+(int)((seed>>>33)%w),sy=y+(int)((seed>>>13)%h);g.setColor(Retro.alpha(Retro.PAPER,30+(int)((seed>>>50)%3)*30));g.fillRect(sx,sy,1,1);}
+            double radius=Math.min(w,h)*.42*mapGlobe.zoom;
+            mapGlobe.paint(g,x,y,w,h,w/2.0,h/2.0,radius,s);
+            mapGlobe.paintGrid(g,Retro.alpha(t.main,52));
+            if(radius<Math.max(w,h))mapGlobe.paintRim(g,t.main);
+            double[] p=new double[3];
+            // sector names on the cells facing the viewer, as the field terminal labels them
+            for(int c=0;c<8;c++)for(int r=0;r<8;r++){
+                if(!mapGlobe.project(PlanetSurvey.MIN+(c+.5)*PlanetSurvey.SPAN/8.0,PlanetSurvey.MIN+(r+.5)*PlanetSurvey.SPAN/8.0,p)||p[2]<.45)continue;
+                String cell=(char)('A'+r)+Integer.toString(c+1);
+                Retro.plain(g,cell,F16,(int)Math.round(p[0])-Retro.width(F16,cell)/2,(int)Math.round(p[1])+5,Retro.alpha(Retro.PAPER,(int)(Math.min(1,(p[2]-.45)*3)*120)));
+            }
+            List<PlanetSurvey.Waypoint> marks=s.waypoints();int hot=-1;
+            for(int i=0;i<marks.size();i++){
+                PlanetSurvey.Waypoint m=marks.get(i);if(!mapGlobe.project(m.x(),m.z(),p)||p[2]<.06)continue;
+                int mx=(int)Math.round(p[0]),my=(int)Math.round(p[1]);boolean lit=i==hoverWaypoint||Math.abs(mouse.x-mx)<=6&&Math.abs(mouse.y-my)<=6&&globeDragAt==null&&mapViewBounds.contains(mouse);
+                if(lit)hot=i;
+                paintWaypoint(g,m,mx,my,lit);
+            }
+            double[] at=globeDragAt==null&&mapViewBounds.contains(mouse)&&!overlayOpen()?mapGlobe.pick(mouse.x,mouse.y):null;
+            if(hot>=0){
+                PlanetSurvey.Waypoint m=marks.get(hot);mapGlobe.project(m.x(),m.z(),p);
+                String label=waypointName(m)+"  "+PlanetGlobe.sector(m.x(),m.z());int lx=(int)p[0]+12,ly=(int)p[1]-8,lw=Retro.width(F16,label)+12;
+                if(lx+lw>x+w-6)lx=(int)p[0]-12-lw;
+                g.setColor(Retro.alpha(Retro.INK,230));g.fillRect(lx,ly-12,lw,20);g.setColor(t.line);g.drawRect(lx,ly-12,lw,20);Retro.plain(g,label,F16,lx+6,ly+3,Retro.PAPER);
+            }else if(at!=null){
+                String cell=PlanetGlobe.sector(at[0],at[1]),seen=s.at(Math.floorMod((int)Math.floor((at[0]-PlanetSurvey.MIN)/PlanetSurvey.PIXEL),PlanetSurvey.PX),Math.max(0,Math.min(PlanetSurvey.PX-1,(int)Math.floor((at[1]-PlanetSurvey.MIN)/PlanetSurvey.PIXEL))))!=0?l("  KEŞFEDİLDİ","  SURVEYED"):"";
+                String label=cell+seen;int lx=Math.min(mouse.x+10,x+w-Retro.width(F16,label)-18),ly=Math.min(mouse.y+24,y+h-30);
+                g.setColor(Retro.alpha(Retro.INK,220));g.fillRect(lx-4,ly-14,Retro.width(F16,label)+8,20);Retro.plain(g,label,F16,lx,ly,seen.isEmpty()?Retro.PAPER:t.data);
+            }
+            // the survey sweep, now a slow band over the glass
+            int sweep=x+(int)(((time*.09)%1)*w);Paint old=g.getPaint();
+            g.setPaint(new GradientPaint(sweep-120,0,Retro.alpha(t.main,0),sweep,0,Retro.alpha(t.main,26)));g.fillRect(Math.max(x,sweep-120),y,Math.min(120,sweep-x),h);g.setPaint(old);
+            g.setColor(Retro.alpha(t.hot,70));g.fillRect(sweep,y,1,h);
+            // zoom and keys
+            Retro.plain(g,"ZOOM",F16,x+14,y+24,QUIET);Retro.seg7(g,String.format(Locale.ROOT,"%.1f",mapGlobe.zoom),x+14,y+32,18,t.data,time);
+            int kx=x+w-44;
+            mapZoomInBounds.setBounds(kx,y+12,32,30);mapZoomOutBounds.setBounds(kx,y+46,32,30);mapCentreBounds.setBounds(kx,y+80,32,30);
+            for(Rectangle k:List.of(mapZoomInBounds,mapZoomOutBounds,mapCentreBounds)){
+                double hv=hover(k);g.setColor(Retro.alpha(Retro.INK,220));g.fillRect(k.x,k.y,k.width,k.height);g.setColor(hv>.5?t.hot:t.line);g.drawRect(k.x,k.y,k.width,k.height);
+                Color ink=Retro.mix(t.main,Color.WHITE,.4*hv);g.setColor(ink);int cx=k.x+16,cy=k.y+15;
+                if(k==mapCentreBounds){g.drawOval(cx-6,cy-6,12,12);g.fillRect(cx-1,cy-1,3,3);g.fillRect(cx-10,cy,4,1);g.fillRect(cx+7,cy,4,1);g.fillRect(cx,cy-10,1,4);g.fillRect(cx,cy+7,1,4);}
+                else{g.fillRect(cx-6,cy-1,13,3);if(k==mapZoomInBounds)g.fillRect(cx-1,cy-6,3,13);}
+            }
+            String help=l("SÜRÜKLE: ÇEVİR  //  TEKER: YAKINLAŞ  //  ÇİFT TIK: ODAKLA","DRAG: TURN  //  WHEEL: ZOOM  //  DOUBLE CLICK: FOCUS");
+            if(Retro.width(F16,help)<w-28){g.setColor(Retro.alpha(Retro.INK,200));g.fillRect(x+1,y+h-26,w-2,25);Retro.plain(g,help,F16,x+14,y+h-8,QUIET);}
+            g.setClip(clip);
+            Retro.frame(g,x,y,w,h,t,reveal(1),null);
+        }
+        private String waypointName(PlanetSurvey.Waypoint m){return m.death()?l("ÖLÜM NOKTASI","DEATHPOINT"):m.name();}
+        /** Xaero's sixteen waypoint colours, so a marker reads the same here as in game. */
+        private static final int[] WAYPOINT_COLORS={0x000000,0x0000AA,0x00AA00,0x00AAAA,0xAA0000,0xAA00AA,0xFFAA00,0xAAAAAA,0x555555,0x5555FF,0x55FF55,0x55FFFF,0xFF5555,0xFF55FF,0xFFFF55,0xFFFFFF};
+        private void paintWaypoint(Graphics2D g,PlanetSurvey.Waypoint m,int x,int y,boolean lit){
+            if(m.death()){g.setColor(Retro.INK);g.fillRect(x-4,y-4,9,9);g.setColor(Retro.RED);for(int i=-3;i<=3;i++){g.fillRect(x+i,y+i,1,1);g.fillRect(x+i,y-i,1,1);}return;}
+            Color fill=new Color(WAYPOINT_COLORS[m.color()]);
+            for(int d=-5;d<=5;d++){int half=5-Math.abs(d);g.setColor(Retro.INK);g.fillRect(x-half,y+d,half*2+1,1);}
+            for(int d=-4;d<=4;d++){int half=4-Math.abs(d);g.setColor(fill);g.fillRect(x-half,y+d,half*2+1,1);}
+            g.setColor(Retro.PAPER);g.fillRect(x,y,1,1);
+            if(lit){double pulse=(time*1.6)%1;int rr=(int)(7+pulse*10);g.setColor(Retro.alpha(Retro.PAPER,(int)(200*(1-pulse))));g.drawOval(x-rr,y-rr,rr*2,rr*2);}
+        }
+        /** The survey log beside the globe: world, share seen, area, sectors and the waypoint list. */
+        private void paintSurveyLog(Graphics2D g,Retro.Theme t,PlanetSurvey.Snapshot s,int x,int y,int w,int h){
+            Retro.panel(g,x,y,w,h,t,reveal(1.4),l("KEŞİF KAYDI","SURVEY LOG"));
+            int ix=x+16,iw=w-32,cy=y+52;
+            List<String> worlds=survey.worlds();String world=s.world().isEmpty()?l("KAYIT YOK","NO RECORD"):s.world().replaceFirst("^(server|local)-","");
+            surveyWorldBounds.setBounds(worlds.size()>1?x+8:0,worlds.size()>1?cy-16:0,worlds.size()>1?w-16:0,worlds.size()>1?24:0);double hw=hover(surveyWorldBounds);
+            if(hw>.01){g.setColor(Retro.alpha(t.main,(int)(30*hw)));g.fillRect(surveyWorldBounds.x,surveyWorldBounds.y,surveyWorldBounds.width,surveyWorldBounds.height);}
+            String prefix=l("DÜNYA: ","WORLD: ");Retro.plain(g,prefix,F16,ix,cy,QUIET);
+            Retro.plain(g,Retro.fit(F16,world,iw-Retro.width(F16,prefix)-(worlds.size()>1?28:0)),F16,ix+Retro.width(F16,prefix),cy,hw>.5?t.hot:Retro.PAPER);
+            if(worlds.size()>1)Retro.right(g,">>",F16,ix+iw,cy,t.data,0);
+            cy+=32;
+            Retro.plain(g,l("KEŞFEDİLEN GEZEGEN","PLANET SURVEYED"),F16,ix,cy,QUIET);
+            boolean compact=h<470; // a small window keeps room for the waypoint list
+            String pct=String.format(Locale.ROOT,"%.2f",s.fraction()*100);int segH=compact?22:30,pw=Retro.seg7(g,pct,ix,cy+10,segH,t.data,time);Retro.plain(g,"%",F16,ix+pw+8,cy+10+segH,t.dataMuted);
+            cy+=segH+34;
+            if(!compact){Retro.hatch(g,ix,cy,iw,10,Math.min(1,Math.max(s.empty()?0:.01,s.fraction()*20)),t.main,time*4);cy+=32;} // the bar is 5% full scale: early travel still shows
+            int sectors=0;boolean[] seenSector=new boolean[64];
+            for(int i=0;i<s.tiles().length;i++)if(s.tiles()[i]!=null){int c=(i%PlanetSurvey.TILES)*8/PlanetSurvey.TILES,r=(i/PlanetSurvey.TILES)*8/PlanetSurvey.TILES;if(!seenSector[r*8+c]){seenSector[r*8+c]=true;sectors++;}}
+            String saved=s.savedAt()<=0?"--":java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(s.savedAt()),ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("dd.MM  HH:mm"));
+            String[][] rows={{l("ALAN","AREA"),String.format(Locale.ROOT,"%.1f KM²",s.seenPixels()*4/1e6)},{l("SEKTÖR","SECTORS"),sectors+" / 64"},{l("İŞARET","WAYPOINTS"),Integer.toString(s.waypoints().size())},{l("SON KAYIT","LAST SAVED"),saved}};
+            for(String[] row:rows){Retro.plain(g,row[0],F16,ix,cy,t.muted);Retro.right(g,row[1],F16,ix+iw,cy,Retro.PAPER,0);cy+=22;}
+            cy+=8;g.setColor(t.line);g.drawLine(ix,cy,ix+iw,cy);cy+=24;
+            Retro.text(g,l("İŞARETLER","WAYPOINTS"),F16,ix,cy,t.main,.5);cy+=10;
+            List<PlanetSurvey.Waypoint> marks=s.waypoints();int rowH=26,fitAll=(y+h-34-cy)/rowH;boolean paged=marks.size()>Math.min(waypointBounds.length,fitAll);
+            int listBottom=y+h-(paged?54:34),visible=Math.max(0,Math.min(waypointBounds.length,(listBottom-cy)/rowH));
+            waypointScroll=Math.max(0,Math.min(Math.max(0,marks.size()-visible),waypointScroll));
+            hoverWaypoint=-1;
+            for(int i=0;i<waypointBounds.length;i++){
+                int index=waypointScroll+i;Rectangle r=waypointBounds[i];
+                if(i>=visible||index>=marks.size()){r.setBounds(0,0,0,0);continue;}
+                r.setBounds(x+8,cy+i*rowH,w-16,rowH-2);double hv=hover(r);if(hv>.5)hoverWaypoint=index;
+                PlanetSurvey.Waypoint m=marks.get(index);
+                if(hv>.01){g.setColor(Retro.alpha(t.main,(int)(36*hv)));g.fillRect(r.x,r.y,r.width,r.height);}
+                paintWaypoint(g,m,ix+5,r.y+r.height/2,false);
+                String sector=PlanetGlobe.sector(m.x(),m.z());
+                Retro.plain(g,Retro.fit(F16,waypointName(m),iw-30-Retro.width(F16,sector)-10),F16,ix+18,r.y+r.height/2+5,hv>.5?t.hot:m.death()?Retro.RED:Retro.PAPER);
+                Retro.right(g,sector,F16,ix+iw,r.y+r.height/2+5,t.data,0);
+            }
+            if(marks.isEmpty()){
+                List<String> hint=wrapLines(F16,s.empty()?l("Oyunda dolaştıkça gördüğün yerler burada belirir.","The ground you see in game appears here as you travel."):l("Oyunda haritaya işaret koyduğunda burada listelenir.","Waypoints you set on the map in game are listed here."),iw);
+                for(int i=0;i<Math.min(3,hint.size())&&cy+22+i*20<listBottom;i++)Retro.plain(g,hint.get(i),F16,ix,cy+22+i*20,QUIET);
+            }else if(paged&&visible>0)Retro.right(g,(waypointScroll+1)+"-"+Math.min(marks.size(),waypointScroll+visible)+" / "+marks.size(),F16,ix+iw,y+h-36,STEEL,0);
+            String foot=!survey.error().isEmpty()?l("OKUMA HATASI: ","READ ERROR: ")+survey.error():l("YEREL // SALT OKUNUR","LOCAL // READ ONLY");
+            Retro.plain(g,Retro.fit(F16,foot,iw),F16,ix,y+h-14,survey.error().isEmpty()?STEEL:t.alert);
         }
 
         // ================================================================ boot and launch
@@ -1282,8 +1343,8 @@ public final class ErdvynLauncher {
         /** Click/Esc/Space jumps to the end of the decorative boot. */
         private void skipBoot(){if(!bootActive)return;bootStartedAt=Math.min(bootStartedAt,time-BOOT_SECONDS);repaint();}
         private void dismissLaunchFailure(){launchOverlayActive=false;launchFailed=false;gameCrashed=false;launchAdvice="";gameLaunching=false;for(Rectangle r:List.of(launchDismissBounds,launchLogsBounds,launchCancelBounds,crashReportsBounds,crashPlayBounds))r.setBounds(0,0,0,0);repaint();}
-        /** The window is hidden while Minecraft runs: no repaint timer, no video decoding, no status pings. */
-        void suspendForGame(){timer.stop();serverStatus.close();video.setUiGate(false);video.setPaused(true);}
+        /** The window is hidden while Minecraft runs: no repaint timer, no status pings. */
+        void suspendForGame(){timer.stop();serverStatus.close();}
         private void resumeAfterGame(){serverStatus=new MinecraftServerStatus(this::onServerStatus);if(!uiTest())serverStatus.start();lastTickNanos=0;timer.start();}
         /** Exit 0 is a normal quit and closes the launcher as before; anything else brings it back with the crash panel. */
         private void onGameExited(int code){LauncherLog.write("Minecraft exited with code "+code);if(code==0){frame.shutdownAndExit();return;}frame.showAfterGame();resumeAfterGame();showGameCrash(code);}
@@ -1297,12 +1358,12 @@ public final class ErdvynLauncher {
             notify(l("Minecraft çöktü (çıkış kodu ","Minecraft crashed (exit code ")+code+").");repaint();
         }
         private boolean confirmed(String action){if(pendingConfirm.equals(action)){pendingConfirm="";pendingConfirmUntil=0;return true;}pendingConfirm=action;pendingConfirmUntil=time+4;playUiSound(70);repaint();return false;}
-        private void startLauncherBoot(){launcherReady=false;video.setUiGate(false);bootActive=true;bootCompleteSound=false;lastBootBlock=0;bootStartedAt=time;playBootSound(0);}
+        private void startLauncherBoot(){launcherReady=false;bootActive=true;bootCompleteSound=false;lastBootBlock=0;bootStartedAt=time;playBootSound(0);}
         private void advanceBoot(){
             if(!bootActive)return;double p=time-bootStartedAt,progress=bootProgress(p);int block=(int)(progress*28);
             if(block>lastBootBlock){if(block/3!=lastBootBlock/3)playBootSound(1);lastBootBlock=block;}
             if(progress>=1&&!bootCompleteSound){bootCompleteSound=true;playBootSound(2);}
-            if(p>=BOOT_SECONDS+.35){bootActive=false;launcherReady=true;triggerCameraGlitch(5.6);}
+            if(p>=BOOT_SECONDS+.35){bootActive=false;launcherReady=true;homeGlobeOnAt=time;}
         }
         private void playBootSound(int kind){if(!uiTest())sound.boot(kind);}
         private void playUiSound(double pitch){if(!uiTest())sound.click(pitch);}
@@ -1320,15 +1381,15 @@ public final class ErdvynLauncher {
             for(double[] v:switchAnim.values()){if(Math.abs(v[1]-v[0])>.004){v[0]=Retro.approach(v[0],v[1],14,dt);easing=true;}else v[0]=v[1];}
             if(pendingConfirmUntil>0&&time>pendingConfirmUntil){pendingConfirm="";pendingConfirmUntil=0;}
             advanceBoot();if(!uiTest()){pollBackendIfDue();pollLauncherUpdateIfDue();}
-            if(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&time>=nextCameraGlitchAt)triggerCameraGlitch(4.2+random.nextDouble()*.9);
-            double cameraGlitch=cameraGlitchStrength(),glitchPhase=(time-cameraGlitchStart)/Math.max(.01,cameraGlitchEnd-cameraGlitchStart);
-            if(cameraGlitch>0&&!cameraVideoSwitched&&glitchPhase>=.24){cameraVideoSwitched=true;video.switchToDifferentVideo();}
             boolean minimized=(frame.getExtendedState()&Frame.ICONIFIED)!=0;
-            video.setUiGate(launcherReady&&!bootActive&&!launchOverlayActive&&page==Page.HOME&&cameraGlitch<.035&&video.isReady());video.setPaused(page!=Page.HOME||launchOverlayActive||minimized);
+            if(page==Page.HOME||page==Page.MAP)survey.refresh(System.currentTimeMillis());
+            centreOnSurvey();
+            homeGlobe.yaw=PlanetGlobe.wrapX(homeGlobe.yaw+dt*PlanetSurvey.SPAN/90.0); // once round every ninety seconds
+            boolean globeMoving=mapGlobe.tick(dt)||globeDragAt!=null||page==Page.HOME&&time-homeGlobeOnAt<1;
             launchDisplayedProgress=Retro.approach(launchDisplayedProgress,launchTargetProgress,5,dt);
             if(powerOff>=0&&time-powerOff>=.34){frame.shutdownAndExit();return;}
             // Adaptive frame rate: 60 fps while something moves, 30 when idle, 20 in the background, 4 when minimized.
-            boolean animating=easing||bootActive||launchOverlayActive||powerOff>=0||pageTransition<1||time-pageSwitchedAt<1.9||opening<1||Math.abs(sidebarExpand-sideTarget)>.004||selectedNews>=0&&time-articleOpenedAt<3||cameraGlitch>0;
+            boolean animating=easing||bootActive||launchOverlayActive||powerOff>=0||pageTransition<1||time-pageSwitchedAt<1.9||opening<1||Math.abs(sidebarExpand-sideTarget)>.004||selectedNews>=0&&time-articleOpenedAt<3||globeMoving;
             int delay=minimized?250:animating?16:frame.isActive()?33:50;
             if(timer.getDelay()!=delay)timer.setDelay(delay);
             repaint();
@@ -1336,7 +1397,15 @@ public final class ErdvynLauncher {
         private void toggleLanguage() { language = language == Language.TR ? Language.EN : Language.TR; preferences.put("language", language.name()); repaint(); }
         private void navigate(Page next){if(next==Page.ADMIN&&(apiClient.current()==null||!apiClient.current().account().admin()))return;showPage(next);}
         /** Switches pages without the admin check; captures in UI-test mode use it to show the locked admin page. */
-        private void showPage(Page next){if(next==Page.ADMIN&&!uiTest()&&(apiClient.current()==null||!apiClient.current().account().admin()))return;if(page!=next){previousPage=page;page=next;pageTransition=0;pageSwitchedAt=time;}profileOpen=false;selectedNews=-1;newsComposeOpen=false;repaint();}
+        private void showPage(Page next){if(next==Page.ADMIN&&!uiTest()&&(apiClient.current()==null||!apiClient.current().account().admin()))return;if(page!=next){previousPage=page;page=next;pageTransition=0;pageSwitchedAt=time;if(next==Page.HOME)homeGlobeOnAt=time+.12;}profileOpen=false;selectedNews=-1;newsComposeOpen=false;globeDragAt=null;repaint();}
+        /** A newly read world: both globes turn to the ground its player knows (the spawn while there is none). */
+        private void centreOnSurvey(){
+            PlanetSurvey.Snapshot s=survey.current();String key=s.world()+"@"+s.tileCount();
+            if(key.equals(mapCentredOn))return;boolean first=mapCentredOn.isEmpty()||!mapCentredOn.startsWith(s.world()+"@");mapCentredOn=key;
+            if(!first)return; // the same world grew: keep the player's view
+            homeGlobe.pitch=-.3;homeGlobe.yaw=PlanetGlobe.wrapX(s.centreX()-PlanetSurvey.SPAN*.08);
+            mapGlobe.stop();mapGlobe.yaw=s.centreX();mapGlobe.pitch=Math.max(-1.2,Math.min(1.2,((s.centreZ()-PlanetSurvey.MIN)/PlanetSurvey.SPAN-.5)*Math.PI));mapGlobe.zoom=s.empty()?1:1.6;
+        }
 
         @Override public void mouseClicked(MouseEvent e) {
             Point p=e.getPoint();
@@ -1353,7 +1422,7 @@ public final class ErdvynLauncher {
                 return;
             }
             if(e.getClickCount()==2&&e.getY()<HEADER&&e.getX()>SIDEBAR&&!languageBounds.contains(p)&&!profileBounds.contains(p)&&!notificationBounds.contains(p)){frame.toggleMaximized();return;}
-            if(audioBounds.contains(p)){video.toggleMute();playUiSound(105);return;}
+            if(audioBounds.contains(p)){setUiVolume(sound.volume()>.001?0:Math.max(.2,preferences.getDouble("uiVolume",.8)));playUiSound(105);return;}
             if (languageBounds.contains(p)) { playUiSound(128);toggleLanguage(); return; }
             if(notificationBounds.contains(p)){playUiSound(94);notificationsOpen=!notificationsOpen;seenNotifications=notifications.size();profileOpen=false;repaint();return;}
             // The notification bus is a modal overlay. Handle its update action before
@@ -1375,6 +1444,8 @@ public final class ErdvynLauncher {
             for (int i = 0; i < navBounds.length; i++) if (navBounds[i].contains(p)) { playUiSound(92+i*7);navigate(Page.values()[i]); return; }
             if(overSidebar(p))return; // the widened sidebar covers the page: never click through it
             if (page == Page.HOME && playBounds.contains(p)) { requestGameStart(); return; }
+            if(page==Page.HOME&&homeGlobeBounds.contains(p)&&p.distance(homeGlobe.centreX(),homeGlobe.centreY())<=homeGlobe.radius()){playUiSound(99);openMapFromHome();return;}
+            if(page==Page.MAP&&mapClick(p,e.getClickCount()))return;
             if (page == Page.HOME && instancePathBounds.contains(p)) { playUiSound(118);openModpackFolder(); return; }
             if(page==Page.NEWS&&newsComposeBounds.contains(p)){playUiSound(96);newsComposeOpen=true;newsField=0;requestFocusInWindow();repaint();return;}
             if(page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(newsBounds[i].contains(p)&&newsFirstVisible+i<newsPosts.size()){playUiSound(100);selectedNews=newsFirstVisible+i;articleScroll=0;articleOpenedAt=time;repaint();return;}
@@ -1399,31 +1470,64 @@ public final class ErdvynLauncher {
             repaint();
         }
         private void step(Runnable change){change.run();playUiSound(120);repaint();}
+        /** The HOME hologram opens on the MAP channel facing the same way, then flies to the ground the player knows. */
+        private void openMapFromHome(){
+            navigate(Page.MAP);mapGlobe.stop();mapGlobe.yaw=homeGlobe.yaw;mapGlobe.pitch=homeGlobe.pitch;mapGlobe.zoom=1;
+            PlanetSurvey.Snapshot s=survey.current();if(!s.empty())mapGlobe.flyTo(s.centreX(),s.centreZ(),1.8);
+        }
+        private void zoomMap(double factor){mapGlobe.flyTo(mapGlobe.yaw,PlanetSurvey.MIN+(mapGlobe.pitch/Math.PI+.5)*PlanetSurvey.SPAN,Math.max(.8,Math.min(14,mapGlobe.zoom*factor)));}
+        private void centreMap(){PlanetSurvey.Snapshot s=survey.current();mapGlobe.flyTo(s.centreX(),s.centreZ(),s.empty()?1:1.8);}
+        /** Arrows turn the MAP globe, + and - zoom, C or Home flies back to the surveyed ground. */
+        private boolean mapKey(int key){
+            double turn=PlanetSurvey.SPAN/24.0/mapGlobe.zoom,tilt=.14/mapGlobe.zoom;
+            switch(key){
+                case KeyEvent.VK_LEFT->mapGlobe.nudge(-turn,0);
+                case KeyEvent.VK_RIGHT->mapGlobe.nudge(turn,0);
+                case KeyEvent.VK_UP->mapGlobe.nudge(0,-tilt);
+                case KeyEvent.VK_DOWN->mapGlobe.nudge(0,tilt);
+                case KeyEvent.VK_ADD,KeyEvent.VK_PLUS,KeyEvent.VK_EQUALS->zoomMap(1.6);
+                case KeyEvent.VK_SUBTRACT,KeyEvent.VK_MINUS->zoomMap(1/1.6);
+                case KeyEvent.VK_C,KeyEvent.VK_HOME->centreMap();
+                default->{return false;}
+            }
+            repaint();return true;
+        }
+        private boolean mapClick(Point p,int clicks){
+            if(mapZoomInBounds.contains(p)||mapZoomOutBounds.contains(p)){playUiSound(mapZoomInBounds.contains(p)?124:108);zoomMap(mapZoomInBounds.contains(p)?1.8:1/1.8);return true;}
+            if(mapCentreBounds.contains(p)){playUiSound(116);centreMap();return true;}
+            if(surveyWorldBounds.contains(p)){playUiSound(101);survey.next();mapCentredOn="";return true;}
+            List<PlanetSurvey.Waypoint> marks=survey.current().waypoints();
+            for(int i=0;i<waypointBounds.length;i++)if(waypointBounds[i].contains(p)&&waypointScroll+i<marks.size()){PlanetSurvey.Waypoint m=marks.get(waypointScroll+i);playUiSound(110+i*3);mapGlobe.flyTo(m.x(),m.z(),Math.max(4,mapGlobe.zoom));return true;}
+            if(clicks==2&&mapViewBounds.contains(p)){double[] at=mapGlobe.pick(p.x,p.y);if(at!=null){playUiSound(118);mapGlobe.flyTo(at[0],at[1],Math.min(14,mapGlobe.zoom*2.2));}return true;}
+            return false;
+        }
+        private void setUiVolume(double value){double v=Math.max(0,Math.min(1,value));sound.setVolume(v);preferences.putBoolean("uiMuted",v<=.001);if(v>.001)preferences.putDouble("uiVolume",v);repaint();}
 
         @Override public void mouseMoved(MouseEvent e) {
             mouse=e.getPoint();pointerInside=true;
             hoverNews=-1;if(page==Page.NEWS)for(int i=0;i<newsBounds.length;i++)if(hot(newsBounds[i]))hoverNews=i;
             int edge=launchOverlayActive||bootActive?0:edgeMask(mouse);if(edge!=0){setCursor(Cursor.getPredefinedCursor(cursorFor(edge)));repaint();return;}
             // Every control registers itself when painted, so "is anything clickable under the pointer" is one scan.
-            boolean clickable=bootActive||hoverAnim.keySet().stream().anyMatch(this::hot)||page==Page.MAP&&!overlayOpen()&&localSurveyHit(mouse);
-            setCursor(Cursor.getPredefinedCursor(clickable?Cursor.HAND_CURSOR:Cursor.DEFAULT_CURSOR));repaint();
+            boolean clickable=bootActive||hoverAnim.keySet().stream().anyMatch(this::hot);
+            setCursor(Cursor.getPredefinedCursor(clickable?Cursor.HAND_CURSOR:onMapGlobe(mouse)?Cursor.CROSSHAIR_CURSOR:Cursor.DEFAULT_CURSOR));repaint();
         }
-        private boolean localSurveyHit(Point p){int x=contentLeft(),y=186;return p.x>=x&&p.y>=y&&p.x<getWidth()-32&&p.y<y+25;}
+        /** On the MAP page's glass, away from its keys and the widened sidebar: there a press grabs the globe. */
+        private boolean onMapGlobe(Point p){return page==Page.MAP&&!overlayOpen()&&mapViewBounds.contains(p)&&!overSidebar(p)&&!mapZoomInBounds.contains(p)&&!mapZoomOutBounds.contains(p)&&!mapCentreBounds.contains(p);}
         @Override public void mousePressed(MouseEvent e) {
             requestFocusInWindow(); // keys (channels, Enter, Esc) follow the last click into the window
-            if(!overlayOpen()&&page==Page.MAP&&localSurvey.press(e.getPoint())){if(e.getClickCount()==2)localSurvey.reset();return;}
+            if(onMapGlobe(e.getPoint())&&edgeMask(e.getPoint())==0){globeDragAt=e.getPoint();mapGlobe.stop();return;}
             pressedControl=controlAt(e.getPoint());
-            if(volumeBounds.contains(e.getPoint())){volumeDragging=true;setVideoVolumeFromMouse(e.getX());return;}
+            if(volumeBounds.contains(e.getPoint())){volumeDragging=true;setUiVolumeFromMouse(e.getX());return;}
             windowActionStart=e.getLocationOnScreen();windowStartBounds=frame.getBounds();resizeMask=launchOverlayActive||bootActive?0:edgeMask(e.getPoint());
             resizingWindow=resizeMask!=0;draggingWindow=!resizingWindow&&e.getY()<HEADER&&e.getX()>SIDEBAR&&!languageBounds.contains(e.getPoint())&&!closeBounds.contains(e.getPoint())&&!minimizeBounds.contains(e.getPoint())&&!profileBounds.contains(e.getPoint())&&!notificationBounds.contains(e.getPoint());
         }
-        @Override public void mouseReleased(MouseEvent e) {localSurvey.release();pressedControl="";volumeDragging=false;draggingWindow=false;resizingWindow=false;resizeMask=0;windowActionStart=null;windowStartBounds=null;}
+        @Override public void mouseReleased(MouseEvent e) {if(globeDragAt!=null){mapGlobe.release();globeDragAt=null;}pressedControl="";volumeDragging=false;draggingWindow=false;resizingWindow=false;resizeMask=0;windowActionStart=null;windowStartBounds=null;}
         @Override public void mouseEntered(MouseEvent e) { pointerInside=true; }
         @Override public void mouseExited(MouseEvent e) { pointerInside=false; hoverNews=-1; repaint(); }
         @Override public void mouseDragged(MouseEvent e) {
             mouse=e.getPoint();
-            if(page==Page.MAP&&localSurvey.drag(e.getPoint())){repaint();return;}
-            if(volumeDragging){setVideoVolumeFromMouse(e.getX());return;}
+            if(globeDragAt!=null){mapGlobe.drag(e.getX()-globeDragAt.x,e.getY()-globeDragAt.y);globeDragAt=e.getPoint();repaint();return;}
+            if(volumeDragging){setUiVolumeFromMouse(e.getX());return;}
             if(windowActionStart==null||windowStartBounds==null)return;Point now=e.getLocationOnScreen();int dx=now.x-windowActionStart.x,dy=now.y-windowActionStart.y;
             if(draggingWindow){frame.setLocation(windowStartBounds.x+dx,windowStartBounds.y+dy);return;}
             if(!resizingWindow)return;int x=windowStartBounds.x,y=windowStartBounds.y,w=windowStartBounds.width,h=windowStartBounds.height,minW=frame.getMinimumSize().width,minH=frame.getMinimumSize().height;
@@ -1431,8 +1535,11 @@ public final class ErdvynLauncher {
             if(w<minW){if((resizeMask&1)!=0)x-=minW-w;w=minW;}if(h<minH){if((resizeMask&4)!=0)y-=minH-h;h=minH;}frame.setBounds(x,y,w,h);
         }
 
-        @Override public void mouseWheelMoved(MouseWheelEvent e){if(!overlayOpen()&&page==Page.MAP&&localSurvey.wheel(e.getPoint(),e.getPreciseWheelRotation())){repaint();return;}if(audioBounds.contains(e.getPoint())||volumeBounds.contains(e.getPoint())){video.setVolume(video.volume()-e.getPreciseWheelRotation()*.06);repaint();return;}if(selectedNews>=0){articleScroll=Math.max(0,Math.min(articleMaxScroll,articleScroll+e.getWheelRotation()*3));articleOpenedAt=Math.min(articleOpenedAt,time-4);repaint();return;}if(page==Page.NEWS&&!newsComposeOpen){int max=Math.max(0,(newsPosts.size()-newsVisibleRows)*40);newsScroll=Math.max(0,Math.min(max,newsScroll+e.getWheelRotation()*40));repaint();}}
-        private void setVideoVolumeFromMouse(int x){int start=volumeBounds.x+4,end=start+Math.max(18,volumeBounds.width-10);video.setVolume((x-start)/(double)Math.max(1,end-start));repaint();}
+        @Override public void mouseWheelMoved(MouseWheelEvent e){
+            if(onMapGlobe(e.getPoint())){mapGlobe.zoomAt(e.getX(),e.getY(),Math.pow(1.2,-e.getPreciseWheelRotation()),.8,14);repaint();return;}
+            if(page==Page.MAP&&!overlayOpen()&&e.getX()>mapViewBounds.x+mapViewBounds.width&&e.getY()>mapViewBounds.y){waypointScroll=Math.max(0,waypointScroll+e.getWheelRotation());repaint();return;}
+            if(audioBounds.contains(e.getPoint())||volumeBounds.contains(e.getPoint())){setUiVolume(sound.volume()-e.getPreciseWheelRotation()*.06);return;}if(selectedNews>=0){articleScroll=Math.max(0,Math.min(articleMaxScroll,articleScroll+e.getWheelRotation()*3));articleOpenedAt=Math.min(articleOpenedAt,time-4);repaint();return;}if(page==Page.NEWS&&!newsComposeOpen){int max=Math.max(0,(newsPosts.size()-newsVisibleRows)*40);newsScroll=Math.max(0,Math.min(max,newsScroll+e.getWheelRotation()*40));repaint();}}
+        private void setUiVolumeFromMouse(int x){int start=volumeBounds.x+4,end=start+Math.max(18,volumeBounds.width-10);setUiVolume((x-start)/(double)Math.max(1,end-start));}
         private String controlAt(Point point){if(playBounds.contains(point))return"play";for(int i=0;i<navBounds.length;i++)if(navBounds[i].contains(point))return"nav"+i;for(Rectangle key:List.of(ramMinusBounds,ramPlusBounds,renderMinusBounds,renderPlusBounds,simulationMinusBounds,simulationPlusBounds,fpsMinusBounds,fpsPlusBounds,guiMinusBounds,guiPlusBounds))if(page==Page.SETTINGS&&key.contains(point))return"key"+System.identityHashCode(key);return"";}
 
         @Override public void keyTyped(KeyEvent e){char c=e.getKeyChar();if(c<32||c==127)return;if(page==Page.ADMIN){if(adminField==0&&adminTargetDraft.length()<36)adminTargetDraft+=c;else if(adminField==1&&adminCommandDraft.length()<180)adminCommandDraft+=c;repaint();return;}if(newsComposeOpen){if(newsField==0&&newsTitleDraft.length()<100)newsTitleDraft+=c;else if(newsField==1&&newsBodyDraft.length()<5000)newsBodyDraft+=c;repaint();return;}if(!chatFocused||page!=Page.GAME)return;if(chatDraft.length()<180){chatDraft+=c;repaint();}}
@@ -1445,6 +1552,7 @@ public final class ErdvynLauncher {
                 boolean typing=page==Page.ADMIN||page==Page.GAME&&chatFocused;int channel=key>=KeyEvent.VK_F1&&key<=KeyEvent.VK_F7?key-KeyEvent.VK_F1:!typing&&key>=KeyEvent.VK_1&&key<=KeyEvent.VK_7?key-KeyEvent.VK_1:-1;
                 if(channel>=0){if(!navBounds[channel].isEmpty()&&page.ordinal()!=channel){playUiSound(92+channel*7);navigate(Page.values()[channel]);}return;}
                 if(key==KeyEvent.VK_ENTER&&page==Page.HOME){requestGameStart();return;}
+                if(page==Page.MAP&&mapKey(key))return;
             }
             if(key==KeyEvent.VK_ESCAPE&&closeTopOverlay())return;
             if(page==Page.ADMIN){if(e.getKeyCode()==KeyEvent.VK_TAB)adminField=1-adminField;else if(e.getKeyCode()==KeyEvent.VK_ENTER&&adminField==1)queueAdminCommand(adminCommandDraft);else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(adminField==0&&!adminTargetDraft.isEmpty())adminTargetDraft=adminTargetDraft.substring(0,adminTargetDraft.length()-1);else if(adminField==1&&!adminCommandDraft.isEmpty())adminCommandDraft=adminCommandDraft.substring(0,adminCommandDraft.length()-1);}repaint();return;}if(newsComposeOpen){if(e.getKeyCode()==KeyEvent.VK_ESCAPE){newsComposeOpen=false;}else if(e.getKeyCode()==KeyEvent.VK_TAB||e.getKeyCode()==KeyEvent.VK_ENTER){newsField=1-newsField;}else if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE){if(newsField==0&&!newsTitleDraft.isEmpty())newsTitleDraft=newsTitleDraft.substring(0,newsTitleDraft.length()-1);else if(newsField==1&&!newsBodyDraft.isEmpty())newsBodyDraft=newsBodyDraft.substring(0,newsBodyDraft.length()-1);}repaint();return;}if(!chatFocused||page!=Page.GAME)return;if(e.getKeyCode()==KeyEvent.VK_BACK_SPACE&&!chatDraft.isEmpty()){chatDraft=chatDraft.substring(0,chatDraft.length()-1);repaint();}else if(e.getKeyCode()==KeyEvent.VK_ENTER)sendChat();else if(e.getKeyCode()==KeyEvent.VK_ESCAPE){chatFocused=false;repaint();}}
@@ -1613,16 +1721,16 @@ public final class ErdvynLauncher {
                 Desktop.getDesktop().open(launcherInstaller.toFile());frame.shutdownAndExit();}catch(Exception ex){accountNotice=l("GÜNCELLEME HATASI: ","UPDATE ERROR: ")+shortError(ex);repaint();}}
         private void sendChat(){String message=chatDraft.strip();if(message.isEmpty())return;playUiSound(112);if(hub.connected())hub.sendChat(message);else addChat(ChatLine.system("SYSTEM",l("Sohbet sunucusuna bağlı değilsin.","Not connected to the chat server."),LocalTime.now()));chatDraft="";repaint();}
 
-        void shutdown(){timer.stop();hub.close();serverStatus.close();video.setUiGate(false);sound.shutdown();}
+        void shutdown(){timer.stop();hub.close();serverStatus.close();sound.shutdown();}
         private void onServerStatus(MinecraftServerStatus.Snapshot snapshot){SwingUtilities.invokeLater(()->{serverSnapshot=snapshot;if(!snapshot.sample().isEmpty()&&!hub.connected()){onlinePlayers.clear();onlinePlayers.addAll(snapshot.sample());}repaint();});}
         private void onHubEvent(HubEvent event){SwingUtilities.invokeLater(()->{if(event.kind.equals("chat"))addChat(new ChatLine(event.author,event.value,LocalTime.now()));else if(event.kind.equals("players")){onlinePlayers.clear();if(!event.value.isBlank())onlinePlayers.addAll(Arrays.stream(event.value.split(",")).map(String::strip).filter(s->!s.isEmpty()).limit(ErdvynApiClient.MAX_PLAYERS).toList());}else if(event.kind.equals("status"))addChat(ChatLine.system("SYSTEM",event.value,LocalTime.now()));repaint();});}
 
         // ================================================================ geometry and text helpers
 
-        /** HOME: the left column's width, the lower-third band's height, and the camera monitor that fills the rest (the video panel sits exactly under it). */
+        /** HOME: the left column's width, the lower-third band's height, and the globe monitor that fills the rest. */
         private static int homeLeftW(int w){return Math.min(520,(int)((w-28-(SIDEBAR+32))*.42));}
         private static int lowerThirdH(int h){return h>=700?136:118;}
-        static Rectangle cameraBounds(int w,int h){int x=SIDEBAR+32+homeLeftW(w)+30,top=100,bottom=h-FOOTER-14-lowerThirdH(h)-18;return new Rectangle(x,top,Math.max(160,w-28-x),Math.max(120,bottom-top));}
+        private static Rectangle monitorBounds(int w,int h){int x=SIDEBAR+32+homeLeftW(w)+30,top=100,bottom=h-FOOTER-14-lowerThirdH(h)-18;return new Rectangle(x,top,Math.max(160,w-28-x),Math.max(120,bottom-top));}
         private int contentLeft(){return SIDEBAR+32;}
         private int contentBottom(){return getHeight()-FOOTER-14;}
         private boolean overSidebar(Point p){return p.x<SIDEBAR+RAIL_EXPAND*sidebarExpand;}
@@ -1688,6 +1796,7 @@ public final class ErdvynLauncher {
             packLog.clear();for(String line:List.of("MANIFEST  https://api.erdvyn.net/api/pack/manifest","[OK] mods/erdvyn_gears-0.6.42.jar","[OK] mods/erdvyn_close_quarter-0.9.1.jar","[KEEP] options.txt","[GET] mods/erdvyn_world-0.14.0.jar","[SAVED] mods/erdvyn_world-0.14.0.jar","PACKAGE VERIFIED"))addPackLog(line);
             packProgress=1;packStatus="1187 verified / 1 downloaded / 4 player settings kept";
             notify("Pack ready: 1 files downloaded.");
+            survey.use(PlanetSurvey.sample(PlanetGlobe.atlasNow()));centreOnSurvey();
         }
         void previewSignIn(){if(!uiTest())return;accountLoginInProgress=true;deviceCode="RT7K-2QXM";deviceUrl="https://www.microsoft.com/link";accountNotice=l("KOD PANOYA KOPYALANDI. TARAYICIDA ONAYLA.","CODE COPIED TO CLIPBOARD. CONFIRM IN YOUR BROWSER.");profileOpen=true;}
 
@@ -1699,11 +1808,19 @@ public final class ErdvynLauncher {
             frame.validate();Rectangle moved=frame.getBounds();int rx=getWidth()-2,ry=getHeight()/2;
             mousePressed(testEvent(MouseEvent.MOUSE_PRESSED,rx,ry,moved.x+rx,moved.y+ry));mouseDragged(testEvent(MouseEvent.MOUSE_DRAGGED,rx+90,ry,moved.x+rx+90,moved.y+ry));mouseReleased(testEvent(MouseEvent.MOUSE_RELEASED,rx+90,ry,moved.x+rx+90,moved.y+ry));
             if(frame.getWidth()<moved.width+85)failures.add("edge-resize");
-            frame.layoutLayers();paintForTest();
+            frame.validate();paintForTest();
             clickForTest(navBounds[1]);
             if(page!=Page.NEWS)failures.add("news-navigation");
             keyPressed(new KeyEvent(this,KeyEvent.KEY_PRESSED,System.currentTimeMillis(),0,KeyEvent.VK_F3,KeyEvent.CHAR_UNDEFINED));if(page!=Page.PACK)failures.add("channel-key");
             navigate(Page.MAP);paintForTest();if(page!=Page.MAP)failures.add("world-map");
+            // The globe: a drag turns it, the wheel zooms, a waypoint row flies to it, the HOME hologram opens the map.
+            survey.use(PlanetSurvey.sample(PlanetGlobe.atlasNow()));mapCentredOn="";centreOnSurvey();pageTransition=1;paintForTest();
+            int gx=mapViewBounds.x+mapViewBounds.width/2,gy=mapViewBounds.y+mapViewBounds.height/2;double yaw0=mapGlobe.yaw,zoom0=mapGlobe.zoom;
+            mousePressed(testEvent(MouseEvent.MOUSE_PRESSED,gx,gy,gx,gy));mouseDragged(testEvent(MouseEvent.MOUSE_DRAGGED,gx+80,gy+20,gx+80,gy+20));mouseReleased(testEvent(MouseEvent.MOUSE_RELEASED,gx+80,gy+20,gx+80,gy+20));
+            if(Math.abs(mapGlobe.yaw-yaw0)<100)failures.add("globe-drag");mapGlobe.stop();
+            mouseWheelMoved(new MouseWheelEvent(this,MouseEvent.MOUSE_WHEEL,System.currentTimeMillis(),0,gx,gy,gx,gy,0,false,MouseWheelEvent.WHEEL_UNIT_SCROLL,1,-2));if(mapGlobe.zoom<=zoom0)failures.add("globe-zoom");
+            paintForTest();if(waypointBounds[0].isEmpty())failures.add("waypoint-list");else{clickForTest(waypointBounds[0]);for(int i=0;i<90;i++)mapGlobe.tick(1/60.0);PlanetSurvey.Waypoint first=survey.current().waypoints().get(0);if(Math.abs(mapGlobe.yaw-first.x())>2)failures.add("waypoint-fly");}
+            navigate(Page.HOME);pageTransition=1;paintForTest();clickForTest(new Rectangle((int)homeGlobe.centreX()-8,(int)homeGlobe.centreY()-8,4,4));if(page!=Page.MAP)failures.add("home-globe");
             selectedNews=-1;navigate(Page.HOME);paintForTest();
             clickForTest(profileBounds);
             if(!profileOpen)failures.add("profile-card");profileOpen=false;
@@ -1720,12 +1837,12 @@ public final class ErdvynLauncher {
             newsPosts.add(new ErdvynApiClient.NewsPost(1,"","Self test","line ".repeat(500),"",0));navigate(Page.NEWS);selectedNews=newsPosts.size()-1;articleScroll=0;articleOpenedAt=time-5;paintForTest();mouseWheelMoved(new MouseWheelEvent(this,MouseEvent.MOUSE_WHEEL,System.currentTimeMillis(),0,getWidth()/2,getHeight()/2,0,false,MouseWheelEvent.WHEEL_UNIT_SCROLL,3,2));if(articleMaxScroll==0||articleScroll==0)failures.add("article-scroll");selectedNews=-1;newsPosts.remove(newsPosts.size()-1);
             // Every page paints at the smallest and a large window, with and without content.
             for(Dimension size:List.of(new Dimension(1040,640),new Dimension(1600,900)))for(int pass=0;pass<2;pass++){
-                frame.setSize(size);frame.validate();frame.layoutLayers();if(pass==1)loadSampleData();
+                frame.setSize(size);frame.validate();if(pass==1)loadSampleData();
                 for(Page each:Page.values()){page=each;previousPage=each;pageTransition=1;try{paintForTest();}catch(Exception paintFailure){failures.add("paint-"+each+"-"+size.width+"x"+size.height+":"+paintFailure);}}
                 pageTransition=.4;try{paintForTest();}catch(Exception transitionFailure){failures.add("paint-transition:"+transitionFailure);}pageTransition=1;
             }
-            page=Page.HOME;frame.setBounds(original);frame.layoutLayers();
-            return failures.isEmpty()?"PASS: drag, resize, dispatch, channel-key, world-map, profile, sign-in-cancel, settings, language, modpack, game-panel, boot-sequence, boot-skip, launch-terminal, launch-cancel, crash-panel, notification-clear, article-scroll, page-paint":"FAIL: "+String.join(", ",failures);
+            page=Page.HOME;frame.setBounds(original);frame.validate();
+            return failures.isEmpty()?"PASS: drag, resize, dispatch, channel-key, world-map, globe-drag, globe-zoom, waypoint-fly, home-globe, profile, sign-in-cancel, settings, language, modpack, game-panel, boot-sequence, boot-skip, launch-terminal, launch-cancel, crash-panel, notification-clear, article-scroll, page-paint":"FAIL: "+String.join(", ",failures);
         }
         private void clickForTest(Rectangle r){mouseClicked(testEvent(MouseEvent.MOUSE_CLICKED,r.x+8,r.y+8,frame.getX()+r.x+8,frame.getY()+r.y+8));}
 

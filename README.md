@@ -17,7 +17,7 @@ Windows launcher for Erdvyn: The Frontier MC Server.
 Create the Windows application image, installer and portable archive:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build-release.ps1 -SkipVideos
+powershell -ExecutionPolicy Bypass -File .\tools\build-release.ps1 -Version 2.2.1
 ```
 
 Build outputs are written to `build\dist`.
