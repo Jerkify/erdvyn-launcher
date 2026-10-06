@@ -85,6 +85,7 @@ final class MinecraftLaunchService {
         log.accept("CP    " + classpathFiles.size() + " libraries");
         if (autoConnect) log.accept("JOIN  " + LauncherPaths.serverAddress());
 
+        earlyWindow(game, log);
         ProcessBuilder builder = new ProcessBuilder(command);
         builder.directory(game.toFile());
         if(ticketInEnvironment)builder.environment().put("ERDVYN_SESSION_TICKET",erdvynTicket);
@@ -95,6 +96,37 @@ final class MinecraftLaunchService {
         if (!process.isAlive()) throw new IOException("Minecraft exited during startup. See " + processLog);
         log.accept("PROCESS STARTED / PID " + process.pid());
         return process;
+    }
+
+    /**
+     * Picks NeoForge's early loading window: Erdvyn's when the pack ships its service jar (erdvyn_earlywindow in mods/),
+     * FML's own otherwise. Only the earlyWindowProvider line of config/fml.toml is touched; FML fills in the rest.
+     */
+    static void earlyWindow(Path game, java.util.function.Consumer<String> log) {
+        boolean ours;
+        try (var mods = Files.list(game.resolve("mods"))) {
+            ours = mods.anyMatch(path -> path.getFileName().toString().matches("erdvyn_earlywindow-[0-9.]+\\.jar"));
+        } catch (IOException missing) {
+            ours = false;
+        }
+        String want = "earlyWindowProvider = \"" + (ours ? "erdvyn" : "fmlearlywindow") + "\"";
+        Path toml = game.resolve("config").resolve("fml.toml");
+        try {
+            List<String> lines = Files.isRegularFile(toml) ? new ArrayList<>(Files.readAllLines(toml)) : new ArrayList<>();
+            int at = -1;
+            for (int i = 0; i < lines.size(); i++) if (lines.get(i).strip().startsWith("earlyWindowProvider")) at = i;
+            if (at >= 0 && lines.get(at).strip().equals(want)) return;
+            if (at < 0 && !ours) return; // FML's default already
+            if (at >= 0) lines.set(at, want);
+            else lines.add(want);
+            Files.createDirectories(toml.getParent());
+            Path temp = toml.resolveSibling("fml.toml.erdvyn-tmp");
+            Files.write(temp, lines);
+            Files.move(temp, toml, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            log.accept("EARLY " + (ours ? "erdvyn" : "fmlearlywindow"));
+        } catch (IOException failed) {
+            log.accept("EARLY window choice not saved: " + failed.getMessage());
+        }
     }
 
     /** erdvyn_lib 0.2.8+ reads the ticket from the environment, where other programs cannot read it off the command line. */
