@@ -29,6 +29,12 @@ final class MinecraftLaunchService {
         LauncherPaths.prepareInstance();
         Path install = LauncherPaths.minecraftInstall();
         Path game = LauncherPaths.gameDirectory();
+        // the server is always in the multiplayer list, so PLAY into the main menu is one click from joining
+        try {
+            if (ServerList.ensure(game, "Erdvyn", LauncherPaths.serverAddress())) log.accept("Added " + LauncherPaths.serverAddress() + " to the server list");
+        } catch (IOException e) {
+            log.accept("Server list left as it was (" + e.getClass().getSimpleName() + ")");
+        }
         Path vanillaJson = install.resolve("versions").resolve(LauncherPaths.GAME_VERSION).resolve(LauncherPaths.GAME_VERSION + ".json");
         Path neoJson = install.resolve("versions").resolve(LauncherPaths.NEOFORGE_VERSION).resolve(LauncherPaths.NEOFORGE_VERSION + ".json");
         if (!Files.isRegularFile(vanillaJson) || !Files.isRegularFile(neoJson)) {
@@ -60,7 +66,9 @@ final class MinecraftLaunchService {
         command.add(java.toString());
         command.add("-Xms1024M");
         command.add("-Xmx" + Math.max(2, Math.min(16, ramGb)) + "G");
-        command.add("-XX:+UseG1GC");
+        // generational ZGC (Java 21): sub-millisecond pauses; Distant Horizons warns in chat on G1
+        command.add("-XX:+UseZGC");
+        command.add("-XX:+ZGenerational");
         command.add("-Dfile.encoding=UTF-8");
         command.add("-Duser.language=en");
         command.add("-Duser.country=US");
@@ -162,17 +170,18 @@ final class MinecraftLaunchService {
                     if (end == 0 && chunk.length == 1 << 20) end = chunk.length; // one enormous line: take it as is
                     position += end;
                     for (String line : new String(chunk, 0, end, java.nio.charset.StandardCharsets.UTF_8).split("\\R")) {
-                        if (line.contains("ModLauncher running") && milestones.add("modlauncher")) log.accept("MODLAUNCHER HANDSHAKE / ACCEPTED");
-                        if (line.contains("NeoForge mod loading") && milestones.add("neoforge")) log.accept("NEOFORGE RUNTIME / ONLINE");
-                        if (line.contains("Setting user:") && milestones.add("account")) log.accept("ACCOUNT SESSION / BOUND");
-                        if (line.contains("Backend library: LWJGL") && milestones.add("render")) log.accept("RENDER BACKEND / LINKED");
-                        if (line.contains("Reloading ResourceManager") && milestones.add("resources")) log.accept("RESOURCE BUS / COMPILING ASSETS");
-                        if (line.contains("Sound engine started") && milestones.add("audio")) log.accept("AUDIO BUS / ONLINE");
-                        if (line.contains("Created:") && line.contains("textures/atlas") && milestones.add("atlas")) log.accept("TEXTURE ATLAS / COMPILED");
+                        // Milestones read from the game's own log; ErdvynLauncher.onMinecraftLaunchSignal maps each to a share of the bar.
+                        if (line.contains("ModLauncher running") && milestones.add("modlauncher")) log.accept("Mod loader started");
+                        if (line.contains("NeoForge mod loading") && milestones.add("neoforge")) log.accept("NeoForge is loading the mods");
+                        if (line.contains("Setting user:") && milestones.add("account")) log.accept("Signed in to Minecraft");
+                        if (line.contains("Backend library: LWJGL") && milestones.add("render")) log.accept("Game window opened");
+                        if (line.contains("Reloading ResourceManager") && milestones.add("resources")) log.accept("Loading textures and sounds");
+                        if (line.contains("Sound engine started") && milestones.add("audio")) log.accept("Sound started");
+                        if (line.contains("Created:") && line.contains("textures/atlas") && milestones.add("atlas")) log.accept("Textures built");
                         boolean connected = line.contains("Connecting to " + LauncherPaths.serverAddress());
                         boolean startupComplete = line.contains("Game took ") && line.contains(" to start");
                         if (connected || startupComplete) {
-                            log.accept("MINECRAFT READY / RENDER HANDOFF");
+                            log.accept("Minecraft is ready");
                             return;
                         }
                     }
@@ -180,13 +189,13 @@ final class MinecraftLaunchService {
                 long now = System.currentTimeMillis();
                 if (now - lastHeartbeat >= 7_000L) {
                     lastHeartbeat = now;
-                    log.accept("AWAITING MINECRAFT / PID " + process.pid() + " / " + Math.max(0, (now - started) / 1000) + "S");
+                    log.accept("Waiting for Minecraft, PID " + process.pid() + ", " + Math.max(0, (now - started) / 1000) + " s");
                 }
                 Thread.sleep(350);
             }
         }
         if (!process.isAlive()) throw new IOException("Minecraft stopped while waiting for its window");
-        log.accept("MINECRAFT PROCESS STABLE / HANDOFF");
+        log.accept("Minecraft is running");
     }
 
     private static Map<String, String> variables(MicrosoftAccountService.Session account, Path install, Path game,

@@ -152,6 +152,12 @@ final class PlanetGlobe {
         out[0] = fcx + fr * px; out[1] = fcy + fr * (sl * cp - pz * sp); out[2] = sl * sp + pz * cp;
         return out[2] > 0;
     }
+    /** As {@link #project} for a point {@code k} planet radii from the centre (a station); true while the globe does not hide it. */
+    boolean project(double x, double z, double k, double[] out) {
+        boolean front = project(x, z, out);
+        out[0] = fcx + (out[0] - fcx) * k; out[1] = fcy + (out[1] - fcy) * k;
+        return front || Math.hypot(out[0] - fcx, out[1] - fcy) > fr;
+    }
     /** World (x, z) under a window point, or null off the disc. */
     double[] pick(double mx, double my) {
         if (fr <= 0) return null;

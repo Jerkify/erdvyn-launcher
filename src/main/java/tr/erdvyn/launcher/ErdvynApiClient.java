@@ -101,6 +101,12 @@ final class ErdvynApiClient {
         HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());if(response.statusCode()/100!=2)throw new IllegalStateException(responseError("Publish news",response));
     }
 
+    void deleteNews(long id) throws Exception {
+        Login active=login;if(active==null||!active.account().admin())throw new IllegalStateException("Admin account required");String base=baseUrl();
+        HttpRequest request=HttpRequest.newBuilder(URI.create(base+"/api/news/"+id)).timeout(Duration.ofSeconds(12)).header("Authorization","Bearer "+active.token()).DELETE().build();
+        HttpResponse<String> response=http.send(request,HttpResponse.BodyHandlers.ofString());if(response.statusCode()/100!=2)throw new IllegalStateException(responseError("Delete news",response));
+    }
+
     String grantAdmin(String target) throws Exception { return adminTarget("POST", target); }
     String revokeAdmin(String target) throws Exception { return adminTarget("DELETE", target); }
 

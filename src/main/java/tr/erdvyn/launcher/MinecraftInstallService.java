@@ -48,7 +48,7 @@ final class MinecraftInstallService {
         if (neoForgeReady(neo,neoClient)) {
             ensureLibraries(install,JSON.readTree(Files.readString(neo)),"NEOFORGE LIBRARIES",log);
             HashCache.shared().save();
-            log.accept("MINECRAFT 1.21.1 / NEOFORGE 21.1.243 READY");
+            log.accept("Minecraft 1.21.1 and NeoForge 21.1.243 are installed");
             return;
         }
         Path cache = LauncherPaths.appRoot().resolve("cache");Files.createDirectories(cache);
