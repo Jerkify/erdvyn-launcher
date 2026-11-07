@@ -10,7 +10,10 @@ class UiMessagesTest {
         assertTrue(UiMessages.hint(new java.io.IOException("There is not enough space on the disk")).contains("disk is full"));
         assertTrue(UiMessages.hint(new java.nio.file.AccessDeniedException("mods/a.jar")).contains("could not be accessed"));
         assertTrue(UiMessages.hint(new java.io.IOException("Microsoft sign-in succeeded, but this account does not own Minecraft: Java Edition or has no Java profile")).contains("no Minecraft: Java Edition profile"));
-        assertNull(UiMessages.hint(new java.io.IOException("HTTP 404")));
+        assertTrue(UiMessages.hint(new java.io.IOException("status: 400 Bad Request, error: invalid_grant, error message: The user must sign in again.")).contains("sign-in has expired"));
+assertTrue(MicrosoftAccountService.grantExpired(new IllegalStateException("refresh",new java.io.IOException("error: invalid_grant"))));
+assertFalse(MicrosoftAccountService.grantExpired(new java.io.IOException("HTTP 503")));
+assertNull(UiMessages.hint(new java.io.IOException("HTTP 404")));
         assertNull(UiMessages.hint(null));
     }
 }

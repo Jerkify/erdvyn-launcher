@@ -18,6 +18,7 @@ final class UiMessages {
         String s=text.toString().toLowerCase(Locale.ROOT);
         if(s.contains("java 21 runtime was not found")||s.contains("java 21 is required"))return "Java 21 was not found. Reinstall the launcher or install 64-bit Java 21.";
         if(s.contains("does not own minecraft")||s.contains("no java profile")||s.contains("entitlement")||s.contains("minecraft profile"))return "This Microsoft account has no Minecraft: Java Edition profile. Create one at minecraft.net or sign in with the right account.";
+        if(s.contains("invalid_grant")||s.contains("sign-in has expired"))return "Your Microsoft sign-in has expired. Press SIGN IN and confirm the code in your browser.";
         if(s.contains("login timed out")||s.contains("expired_token"))return "Sign-in timed out. Press SIGN IN again and confirm the code within 5 minutes.";
         if(s.contains("authorization_declined")||s.contains("access_denied"))return "Sign-in was declined in the browser. Try again and allow access.";
         if(s.contains("not enough space")||s.contains("no space left")||s.contains("disk full")||s.contains("disk is full"))return "The disk is full. Free up some space and try again.";

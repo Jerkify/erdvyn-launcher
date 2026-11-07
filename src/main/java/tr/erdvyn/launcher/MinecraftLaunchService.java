@@ -170,18 +170,17 @@ final class MinecraftLaunchService {
                     if (end == 0 && chunk.length == 1 << 20) end = chunk.length; // one enormous line: take it as is
                     position += end;
                     for (String line : new String(chunk, 0, end, java.nio.charset.StandardCharsets.UTF_8).split("\\R")) {
-                        // Milestones read from the game's own log; ErdvynLauncher.onMinecraftLaunchSignal maps each to a share of the bar.
-                        if (line.contains("ModLauncher running") && milestones.add("modlauncher")) log.accept("Mod loader started");
-                        if (line.contains("NeoForge mod loading") && milestones.add("neoforge")) log.accept("NeoForge is loading the mods");
-                        if (line.contains("Setting user:") && milestones.add("account")) log.accept("Signed in to Minecraft");
-                        if (line.contains("Backend library: LWJGL") && milestones.add("render")) log.accept("Game window opened");
-                        if (line.contains("Reloading ResourceManager") && milestones.add("resources")) log.accept("Loading textures and sounds");
-                        if (line.contains("Sound engine started") && milestones.add("audio")) log.accept("Sound started");
-                        if (line.contains("Created:") && line.contains("textures/atlas") && milestones.add("atlas")) log.accept("Textures built");
+                        if (line.contains("ModLauncher running") && milestones.add("modlauncher")) log.accept("MODLAUNCHER HANDSHAKE / ACCEPTED");
+                        if (line.contains("NeoForge mod loading") && milestones.add("neoforge")) log.accept("NEOFORGE RUNTIME / ONLINE");
+                        if (line.contains("Setting user:") && milestones.add("account")) log.accept("ACCOUNT SESSION / BOUND");
+                        if (line.contains("Backend library: LWJGL") && milestones.add("render")) log.accept("RENDER BACKEND / LINKED");
+                        if (line.contains("Reloading ResourceManager") && milestones.add("resources")) log.accept("RESOURCE BUS / COMPILING ASSETS");
+                        if (line.contains("Sound engine started") && milestones.add("audio")) log.accept("AUDIO BUS / ONLINE");
+                        if (line.contains("Created:") && line.contains("textures/atlas") && milestones.add("atlas")) log.accept("TEXTURE ATLAS / COMPILED");
                         boolean connected = line.contains("Connecting to " + LauncherPaths.serverAddress());
                         boolean startupComplete = line.contains("Game took ") && line.contains(" to start");
                         if (connected || startupComplete) {
-                            log.accept("Minecraft is ready");
+                            log.accept("MINECRAFT READY / RENDER HANDOFF");
                             return;
                         }
                     }
@@ -189,13 +188,13 @@ final class MinecraftLaunchService {
                 long now = System.currentTimeMillis();
                 if (now - lastHeartbeat >= 7_000L) {
                     lastHeartbeat = now;
-                    log.accept("Waiting for Minecraft, PID " + process.pid() + ", " + Math.max(0, (now - started) / 1000) + " s");
+                    log.accept("AWAITING MINECRAFT / PID " + process.pid() + " / " + Math.max(0, (now - started) / 1000) + "S");
                 }
                 Thread.sleep(350);
             }
         }
         if (!process.isAlive()) throw new IOException("Minecraft stopped while waiting for its window");
-        log.accept("Minecraft is running");
+        log.accept("MINECRAFT PROCESS STABLE / HANDOFF");
     }
 
     private static Map<String, String> variables(MicrosoftAccountService.Session account, Path install, Path game,

@@ -34,12 +34,33 @@ final class MicrosoftAccountService {
         return profile == null || token == null ? null : new Session(profile.getName(), profile.getId(), token.getToken());
     }
 
+    /** Microsoft refused the stored grant (expired or revoked); it has been deleted and only a new sign-in helps. */
+    static final class SignInExpired extends IOException {
+        SignInExpired(Throwable cause) { super("Your Microsoft sign-in has expired", cause); }
+    }
+
     synchronized Session refresh() throws IOException {
         if (manager == null) return null;
-        MinecraftProfile profile = manager.getMinecraftProfile().getUpToDate();
-        MinecraftToken token = manager.getMinecraftToken().getUpToDate();
-        save();
-        return new Session(profile.getName(), profile.getId(), token.getToken());
+        try {
+            MinecraftProfile profile = manager.getMinecraftProfile().getUpToDate();
+            MinecraftToken token = manager.getMinecraftToken().getUpToDate();
+            save();
+            return new Session(profile.getName(), profile.getId(), token.getToken());
+        } catch (Exception error) {
+            if (!grantExpired(error)) throw error;
+            logout(); // a dead grant kept on disk fails every later PLAY the same way
+            throw new SignInExpired(error);
+        }
+    }
+
+    /** True when Microsoft answered invalid_grant: the stored refresh grant is expired or revoked. */
+    static boolean grantExpired(Throwable error) {
+        for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof SignInExpired) return true;
+            String message = t.getMessage();
+            if (message != null && message.contains("invalid_grant")) return true;
+        }
+        return false;
     }
 
     synchronized Session login(Consumer<MsaDeviceCode> codeConsumer) throws Exception {
